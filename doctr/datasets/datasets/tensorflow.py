@@ -49,10 +49,18 @@ class AbstractDataset(_AbstractDataset):
 
     @staticmethod
     def collate_fn(samples: List[Tuple[tf.Tensor, Any]]) -> Tuple[tf.Tensor, List[Any]]:
-        images, targets = zip(*samples)
+        # FIXME
+        # problems with some shape != 3
+        images, targets = [], []
+        for sample in samples:
+            if sample[0].shape[-1] == 3:
+                images.append(sample[0])
+                targets.append(sample[1])
+
+        # images, targets = zip(*samples)
         images = tf.stack(images, axis=0)
 
-        return images, list(targets)
+        return images, targets
 
 
 class VisionDataset(AbstractDataset, _VisionDataset):  # noqa: D101

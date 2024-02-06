@@ -12,6 +12,7 @@ import hashlib
 import logging
 import multiprocessing as mp
 import time
+from pathlib import Path
 
 import numpy as np
 import psutil
@@ -27,6 +28,32 @@ from doctr.datasets import DetectionDataset
 from doctr.models import detection, login_to_hub, push_to_hf_hub
 from doctr.utils.metrics import LocalizationConfusion
 from utils import EarlyStopper, plot_recorder, plot_samples
+
+SLACK_WEBHOOK_URL = None
+SLACK_WEBHOOK_PATH = Path(os.path.join(os.path.expanduser("~"), ".config", "doctr", "slack_webhook_url.txt"))
+if SLACK_WEBHOOK_PATH.exists():
+    with open(SLACK_WEBHOOK_PATH) as f:
+        SLACK_WEBHOOK_URL = f.read().strip()
+else:
+    print(f"{SLACK_WEBHOOK_PATH} does not exist, skip Slack integration configuration...")
+
+
+def send_on_slack(text: str):
+    """Send a message on Slack.
+
+    Args:
+        text (str): message to send on Slack
+    """
+    if SLACK_WEBHOOK_URL:
+        try:
+            import requests
+
+            requests.post(
+                url=SLACK_WEBHOOK_URL,
+                json={"text": f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]: {text}"},
+            )
+        except Exception:
+            print("Impossible to send message on Slack, continue...")
 
 
 def record_lr(
@@ -106,6 +133,8 @@ def fit_one_epoch(model, train_loader, batch_transforms, optimizer, scheduler, a
 
     model.train()
     # Iterate over the batches of the dataset
+    last_progress = 0
+    interval_progress = 5
     pbar = tqdm(train_loader, position=1)
     for images, targets in pbar:
         if torch.cuda.is_available():
@@ -130,8 +159,12 @@ def fit_one_epoch(model, train_loader, batch_transforms, optimizer, scheduler, a
             optimizer.step()
 
         scheduler.step()
-
         pbar.set_description(f"Training loss: {train_loss.item():.6}")
+        current_progress = pbar.n / pbar.total * 100
+        if current_progress - last_progress > interval_progress:
+            send_on_slack(str(pbar))
+            last_progress = int(current_progress)
+    send_on_slack(f"Final training loss: {train_loss.item():.6}")
 
 
 @torch.no_grad()
@@ -170,6 +203,7 @@ def evaluate(model, val_loader, batch_transforms, val_metric, amp=False):
 
 def main(args):
     print(args)
+    send_on_slack(f"Start training: {args}")
 
     if args.push_to_hub:
         login_to_hub()
@@ -212,6 +246,9 @@ def main(args):
         collate_fn=val_set.collate_fn,
     )
     print(f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in " f"{len(val_loader)} batches)")
+    send_on_slack(
+        f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in " f"{len(val_loader)} batches)"
+    )
     with open(os.path.join(args.val_path, "labels.json"), "rb") as f:
         val_hash = hashlib.sha256(f.read()).hexdigest()
 
@@ -227,6 +264,7 @@ def main(args):
     # Resume weights
     if isinstance(args.resume, str):
         print(f"Resuming {args.resume}")
+        send_on_slack(f"Resuming {args.resume}")
         checkpoint = torch.load(args.resume, map_location="cpu")
         model.load_state_dict(checkpoint)
 
@@ -306,6 +344,9 @@ def main(args):
         collate_fn=train_set.collate_fn,
     )
     print(f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in " f"{len(train_loader)} batches)")
+    send_on_slack(
+        f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in " f"{len(train_loader)} batches)"
+    )
     with open(os.path.join(args.train_path, "labels.json"), "rb") as f:
         train_hash = hashlib.sha256(f.read()).hexdigest()
 
@@ -379,6 +420,7 @@ def main(args):
         val_loss, recall, precision, mean_iou = evaluate(model, val_loader, batch_transforms, val_metric, amp=args.amp)
         if val_loss < min_loss:
             print(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
+            send_on_slack(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
             torch.save(model.state_dict(), f"./{exp_name}.pt")
             min_loss = val_loss
         if args.save_interval_epoch:
@@ -390,6 +432,7 @@ def main(args):
         else:
             log_msg += f"(Recall: {recall:.2%} | Precision: {precision:.2%} | Mean IoU: {mean_iou:.2%})"
         print(log_msg)
+        send_on_slack(log_msg)
         # W&B
         if args.wb:
             wandb.log(

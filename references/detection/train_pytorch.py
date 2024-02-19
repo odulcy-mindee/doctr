@@ -136,6 +136,7 @@ def fit_one_epoch(model, train_loader, batch_transforms, optimizer, scheduler, a
     last_progress = 0
     interval_progress = 5
     pbar = tqdm(train_loader, position=1)
+    send_on_slack(str(pbar))
     for images, targets in pbar:
         if torch.cuda.is_available():
             images = images.cuda()

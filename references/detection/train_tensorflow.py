@@ -117,6 +117,7 @@ def fit_one_epoch(model, train_loader, batch_transforms, optimizer, amp=False):
     last_progress = 0
     interval_progress = 5
     pbar = tqdm(train_iter, position=1)
+    send_on_slack(str(pbar))
     for images, targets in pbar:
         images = batch_transforms(images)
 

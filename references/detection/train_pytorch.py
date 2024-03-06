@@ -4,6 +4,10 @@
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
 import os
+from pathlib import Path
+from doctr.file_utils import CLASS_NAME
+from doctr import datasets
+
 
 os.environ["USE_TORCH"] = "1"
 
@@ -201,6 +205,38 @@ def evaluate(model, val_loader, batch_transforms, val_metric, amp=False):
     recall, precision, mean_iou = val_metric.summary()
     return val_loss, recall, precision, mean_iou
 
+@torch.no_grad()
+def sec_evaluate(model, val_loader, batch_transforms, val_metric, amp=False):
+    # Model in eval mode
+    model.eval()
+    # Reset val metric
+    val_metric.reset()
+    # Validation loop
+    val_loss, batch_cnt = 0, 0
+    for images, targets in tqdm(val_loader):
+        if torch.cuda.is_available():
+            images = images.cuda()
+        images = batch_transforms(images)
+        targets = [{CLASS_NAME: t["boxes"]} for t in targets]
+        if amp:
+            with torch.cuda.amp.autocast():
+                out = model(images, targets, return_preds=True)
+        else:
+            out = model(images, targets, return_preds=True)
+        # Compute metric
+        loc_preds = out["preds"]
+        for target, loc_pred in zip(targets, loc_preds):
+            for boxes_gt, boxes_pred in zip(target.values(), loc_pred.values()):
+                # Remove scores
+                val_metric.update(gts=boxes_gt, preds=boxes_pred[:, :-1])
+
+        val_loss += out["loss"].item()
+        batch_cnt += 1
+
+    val_loss /= batch_cnt
+    recall, precision, mean_iou = val_metric.summary()
+    return val_loss, recall, precision, mean_iou
+
 
 def main(args):
     print(args)
@@ -255,6 +291,67 @@ def main(args):
 
     batch_transforms = Normalize(mean=(0.798, 0.785, 0.772), std=(0.264, 0.2749, 0.287))
 
+    funsd_ds = datasets.FUNSD(
+        train=True,
+        download=True,
+        use_polygons=args.rotation,
+        sample_transforms=T.Resize((args.input_size, args.input_size)),
+    )
+    # Monkeypatch
+    subfolder = funsd_ds.root.split("/")[-2:]
+    funsd_ds.root = str(Path(funsd_ds.root).parent.parent)
+    funsd_ds.data = [(os.path.join(*subfolder, name), target) for name, target in funsd_ds.data]
+    _funsd_ds = datasets.FUNSD(
+        train=False,
+        download=True,
+        use_polygons=args.rotation,
+        sample_transforms=T.Resize((args.input_size, args.input_size)),
+    )
+    subfolder = _funsd_ds.root.split("/")[-2:]
+    funsd_ds.data.extend([(os.path.join(*subfolder, name), target) for name, target in _funsd_ds.data])
+
+    funsd_test_loader = DataLoader(
+        funsd_ds,
+        batch_size=args.batch_size,
+        drop_last=False,
+        num_workers=args.workers,
+        sampler=SequentialSampler(funsd_ds),
+        pin_memory=torch.cuda.is_available(),
+        collate_fn=funsd_ds.collate_fn,
+    )
+    print(f"FUNSD Test set loaded in {time.time() - st:.4}s ({len(funsd_ds)} samples in " f"{len(funsd_test_loader)} batches)")
+
+
+    cord_ds = datasets.CORD(
+        train=True,
+        download=True,
+        use_polygons=args.rotation,
+        sample_transforms=T.Resize((args.input_size, args.input_size)),
+    )
+    # Monkeypatch
+    subfolder = cord_ds.root.split("/")[-2:]
+    cord_ds.root = str(Path(cord_ds.root).parent.parent)
+    cord_ds.data = [(os.path.join(*subfolder, name), target) for name, target in cord_ds.data]
+    _cord_ds = datasets.CORD(
+        train=False,
+        download=True,
+        use_polygons=args.rotation,
+        sample_transforms=T.Resize((args.input_size, args.input_size)),
+    )
+    subfolder = _cord_ds.root.split("/")[-2:]
+    cord_ds.data.extend([(os.path.join(*subfolder, name), target) for name, target in _cord_ds.data])
+
+    cord_test_loader = DataLoader(
+        cord_ds,
+        batch_size=args.batch_size,
+        drop_last=False,
+        num_workers=args.workers,
+        sampler=SequentialSampler(cord_ds),
+        pin_memory=torch.cuda.is_available(),
+        collate_fn=cord_ds.collate_fn,
+    )
+    print(f"CORD Test set loaded in {time.time() - st:.4}s ({len(cord_ds)} samples in " f"{len(funsd_test_loader)} batches)")
+
     # Load doctr model
     model = detection.__dict__[args.arch](
         pretrained=args.pretrained,
@@ -286,6 +383,16 @@ def main(args):
 
     # Metrics
     val_metric = LocalizationConfusion(
+        use_polygons=args.rotation and not args.eval_straight,
+        mask_shape=(args.input_size, args.input_size),
+        use_broadcasting=True if system_available_memory > 62 else False,
+    )
+    funsd_val_metric = LocalizationConfusion(
+        use_polygons=args.rotation and not args.eval_straight,
+        mask_shape=(args.input_size, args.input_size),
+        use_broadcasting=True if system_available_memory > 62 else False,
+    )
+    cord_val_metric = LocalizationConfusion(
         use_polygons=args.rotation and not args.eval_straight,
         mask_shape=(args.input_size, args.input_size),
         use_broadcasting=True if system_available_memory > 62 else False,
@@ -419,6 +526,12 @@ def main(args):
         fit_one_epoch(model, train_loader, batch_transforms, optimizer, scheduler, amp=args.amp)
         # Validation loop at the end of each epoch
         val_loss, recall, precision, mean_iou = evaluate(model, val_loader, batch_transforms, val_metric, amp=args.amp)
+        _, funsd_recall, funsd_precision, funsd_mean_iou = sec_evaluate(
+            model, funsd_test_loader, batch_transforms, funsd_val_metric, amp=args.amp
+        )
+        _, cord_recall, cord_precision, cord_mean_iou = sec_evaluate(
+            model, cord_test_loader, batch_transforms, cord_val_metric, amp=args.amp
+        )
         if val_loss < min_loss:
             print(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
             send_on_slack(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
@@ -431,7 +544,9 @@ def main(args):
         if any(val is None for val in (recall, precision, mean_iou)):
             log_msg += "(Undefined metric value, caused by empty GTs or predictions)"
         else:
-            log_msg += f"(Recall: {recall:.2%} | Precision: {precision:.2%} | Mean IoU: {mean_iou:.2%})"
+            log_msg += f"(Recall: {recall:.2%} | Precision: {precision:.2%} | Mean IoU: {mean_iou:.2%})\n"
+            log_msg += f"FUNSD: Recall: {funsd_recall:.2%} | Precision: {funsd_precision:.2%} | Mean IoU: {funsd_mean_iou:.2%}\n"
+            log_msg += f"CORD: Recall: {cord_recall:.2%} | Precision: {cord_precision:.2%} | Mean IoU: {cord_mean_iou:.2%}"
         print(log_msg)
         send_on_slack(log_msg)
         # W&B

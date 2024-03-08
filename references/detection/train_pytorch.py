@@ -526,12 +526,20 @@ def main(args):
         fit_one_epoch(model, train_loader, batch_transforms, optimizer, scheduler, amp=args.amp)
         # Validation loop at the end of each epoch
         val_loss, recall, precision, mean_iou = evaluate(model, val_loader, batch_transforms, val_metric, amp=args.amp)
-        _, funsd_recall, funsd_precision, funsd_mean_iou = sec_evaluate(
-            model, funsd_test_loader, batch_transforms, funsd_val_metric, amp=args.amp
-        )
-        _, cord_recall, cord_precision, cord_mean_iou = sec_evaluate(
-            model, cord_test_loader, batch_transforms, cord_val_metric, amp=args.amp
-        )
+        funsd_recall, funsd_precision, funsd_mean_iou = 0.0, 0.0, 0.0
+        cord_recall, cord_precision, cord_mean_iou = 0.0, 0.0, 0.0
+        try:
+            _, funsd_recall, funsd_precision, funsd_mean_iou = sec_evaluate(
+                model, funsd_test_loader, batch_transforms, funsd_val_metric, amp=args.amp
+            )
+        except Exception:
+            pass
+        try:
+            _, cord_recall, cord_precision, cord_mean_iou = sec_evaluate(
+                model, cord_test_loader, batch_transforms, cord_val_metric, amp=args.amp
+            )
+        except Exception:
+            pass
         if val_loss < min_loss:
             print(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
             send_on_slack(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")

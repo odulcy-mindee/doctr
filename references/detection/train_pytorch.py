@@ -178,9 +178,13 @@ def evaluate(model, val_loader, batch_transforms, val_metric, amp=False):
     model.eval()
     # Reset val metric
     val_metric.reset()
+    last_progress = 0
+    interval_progress = 5
+    pbar = tqdm(val_loader)
+    send_on_slack(str(pbar))
     # Validation loop
     val_loss, batch_cnt = 0, 0
-    for images, targets in tqdm(val_loader):
+    for images, targets in pbar:
         if torch.cuda.is_available():
             images = images.cuda()
         images = batch_transforms(images)
@@ -198,6 +202,10 @@ def evaluate(model, val_loader, batch_transforms, val_metric, amp=False):
                     boxes_pred = np.concatenate((boxes_pred.min(axis=1), boxes_pred.max(axis=1)), axis=-1)
                 val_metric.update(gts=boxes_gt, preds=boxes_pred[:, :4])
 
+        current_progress = pbar.n / pbar.total * 100
+        if current_progress - last_progress > interval_progress:
+            send_on_slack(str(pbar))
+            last_progress = int(current_progress)
         val_loss += out["loss"].item()
         batch_cnt += 1
 

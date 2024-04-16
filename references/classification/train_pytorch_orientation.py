@@ -236,7 +236,7 @@ def main(args):
 
     torch.backends.cudnn.benchmark = True
 
-    input_size = (256, 256) if args.type == "page" else (128, 128)
+    input_size = (512, 512) if args.type == "page" else (128, 128)
 
     # Load val data generator
     st = time.time()

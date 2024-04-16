@@ -147,7 +147,7 @@ def main(args):
     if not isinstance(args.workers, int):
         args.workers = min(16, mp.cpu_count())
 
-    input_size = (256, 256) if args.type == "page" else (32, 32)
+    input_size = (512, 512) if args.type == "page" else (128, 128)
 
     # AMP
     if args.amp:

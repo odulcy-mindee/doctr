@@ -63,7 +63,7 @@ def send_on_slack(text: str):
             print("Impossible to send message on Slack, continue...")
 
 
-CLASSES = [0, 90, 180, 270]
+CLASSES = [0, -90, 180, 90]
 
 
 def rnd_rotate(img: torch.Tensor, target):
@@ -236,7 +236,7 @@ def main(args):
 
     torch.backends.cudnn.benchmark = True
 
-    input_size = (512, 512) if args.type == "page" else (128, 128)
+    input_size = (512, 512) if args.type == "page" else (256, 256)
 
     # Load val data generator
     st = time.time()

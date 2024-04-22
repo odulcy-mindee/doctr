@@ -227,6 +227,7 @@ def evaluate(model, val_loader, batch_transforms, amp=False):
 
 def main(args):
     print(args)
+    send_on_slack(f"Start training: {args}")
 
     if args.push_to_hub:
         login_to_hub()

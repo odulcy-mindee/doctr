@@ -10,19 +10,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.9"
           architecture: x64
       - name: Cache python modules
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pkg-deps-${{ matrix.python }}-${{ hashFiles('pyproject.toml') }}-docs
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e .[tf] --upgrade
+          pip install -e .[tf,viz,html] --upgrade
           pip install -e .[docs]
 
       - name: Build documentation

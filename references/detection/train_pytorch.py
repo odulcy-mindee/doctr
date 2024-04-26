@@ -19,7 +19,6 @@ import time
 from pathlib import Path
 
 import numpy as np
-import psutil
 import torch
 import wandb
 from torch.optim.lr_scheduler import CosineAnnealingLR, MultiplicativeLR, OneCycleLR, PolynomialLR
@@ -225,7 +224,6 @@ def main(args):
         args.workers = min(16, mp.cpu_count())
 
     torch.backends.cudnn.benchmark = True
-    system_available_memory = int(psutil.virtual_memory().available / 1024**3)
 
     st = time.time()
     val_set = DetectionDataset(
@@ -364,11 +362,6 @@ def main(args):
         model = model.cuda()
 
     # Metrics
-    val_metric = LocalizationConfusion(
-        use_polygons=args.rotation and not args.eval_straight,
-        mask_shape=(args.input_size, args.input_size),
-        use_broadcasting=True if system_available_memory > 62 else False,
-    )
     #funsd_val_metric = LocalizationConfusion(
     #    use_polygons=args.rotation and not args.eval_straight,
     #    mask_shape=(args.input_size, args.input_size),
@@ -379,6 +372,7 @@ def main(args):
     #    mask_shape=(args.input_size, args.input_size),
     #    use_broadcasting=True if system_available_memory > 62 else False,
     #)
+    val_metric = LocalizationConfusion(use_polygons=args.rotation and not args.eval_straight)
 
     if args.test_only:
         print("Running evaluation")

@@ -15,7 +15,6 @@ import time
 from pathlib import Path
 
 import numpy as np
-import psutil
 import tensorflow as tf
 from tensorflow.keras import mixed_precision
 from tqdm.auto import tqdm
@@ -172,8 +171,6 @@ def main(args):
     if not isinstance(args.workers, int):
         args.workers = min(16, mp.cpu_count())
 
-    system_available_memory = int(psutil.virtual_memory().available / 1024**3)
-
     # AMP
     if args.amp:
         mixed_precision.set_global_policy("mixed_float16")
@@ -242,11 +239,8 @@ def main(args):
         print("Done.")
 
     # Metrics
-    val_metric = LocalizationConfusion(
-        use_polygons=args.rotation and not args.eval_straight,
-        mask_shape=(args.input_size, args.input_size),
-        use_broadcasting=True if system_available_memory > 62 else False,
-    )
+    val_metric = LocalizationConfusion(use_polygons=args.rotation and not args.eval_straight)
+
     if args.test_only:
         print("Running evaluation")
         val_loss, recall, precision, mean_iou = evaluate(model, val_loader, batch_transforms, val_metric)

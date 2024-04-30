@@ -11,6 +11,7 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 import datetime
 import multiprocessing as mp
 import time
+from pathlib import Path
 
 import numpy as np
 import tensorflow as tf
@@ -29,6 +30,32 @@ from doctr.models import classification
 from doctr.models.utils import export_model_to_onnx
 from doctr.transforms.functional import rotated_img_tensor
 from utils import EarlyStopper, plot_recorder, plot_samples
+
+SLACK_WEBHOOK_URL = None
+SLACK_WEBHOOK_PATH = Path(os.path.join(os.path.expanduser("~"), ".config", "doctr", "slack_webhook_url.txt"))
+if SLACK_WEBHOOK_PATH.exists():
+    with open(SLACK_WEBHOOK_PATH) as f:
+        SLACK_WEBHOOK_URL = f.read().strip()
+else:
+    print(f"{SLACK_WEBHOOK_PATH} does not exist, skip Slack integration configuration...")
+
+
+def send_on_slack(text: str):
+    """Send a message on Slack.
+
+    Args:
+        text (str): message to send on Slack
+    """
+    if SLACK_WEBHOOK_URL:
+        try:
+            import requests
+
+            requests.post(
+                url=SLACK_WEBHOOK_URL,
+                json={"text": f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]: {text}"},
+            )
+        except Exception:
+            print("Impossible to send message on Slack, continue...")
 
 CLASSES = [0, -90, 180, 90]
 
@@ -99,7 +126,10 @@ def record_lr(
 
 def fit_one_epoch(model, train_loader, batch_transforms, optimizer, amp=False):
     # Iterate over the batches of the dataset
+    last_progress = 0
+    interval_progress = 5
     pbar = tqdm(train_loader, position=1)
+    send_on_slack(str(pbar))
     for images, targets in pbar:
         images = batch_transforms(images)
 
@@ -112,13 +142,22 @@ def fit_one_epoch(model, train_loader, batch_transforms, optimizer, amp=False):
         optimizer.apply_gradients(zip(grads, model.trainable_weights))
 
         pbar.set_description(f"Training loss: {train_loss.numpy().mean():.6}")
+        current_progress = pbar.n / pbar.total * 100
+        if current_progress - last_progress > interval_progress:
+            send_on_slack(str(pbar))
+            last_progress = int(current_progress)
+    send_on_slack(f"Final training loss: {train_loss.item():.6}")
 
 
 def evaluate(model, val_loader, batch_transforms):
     # Validation loop
+    last_progress = 0
+    interval_progress = 5
     val_loss, correct, samples, batch_cnt = 0.0, 0.0, 0.0, 0.0
     val_iter = iter(val_loader)
-    for images, targets in tqdm(val_iter):
+    pbar = tqdm(val_iter)
+    send_on_slack(str(pbar))
+    for images, targets in pbar:
         images = batch_transforms(images)
         out = model(images, training=False)
         loss = tf.nn.sparse_softmax_cross_entropy_with_logits(targets, out)
@@ -128,6 +167,11 @@ def evaluate(model, val_loader, batch_transforms):
         val_loss += loss.numpy().mean()
         batch_cnt += 1
         samples += images.shape[0]
+
+        current_progress = pbar.n / pbar.total * 100
+        if current_progress - last_progress > interval_progress:
+            send_on_slack(str(pbar))
+            last_progress = int(current_progress)
 
     val_loss /= batch_cnt
     acc = correct / samples
@@ -143,6 +187,7 @@ def collate_fn(samples):
 
 def main(args):
     print(args)
+    send_on_slack(f"Start training: {args}")
 
     if args.push_to_hub:
         login_to_hub()
@@ -177,6 +222,10 @@ def main(args):
         collate_fn=collate_fn,
     )
     print(
+        f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in "
+        f"{val_loader.num_batches} batches)"
+    )
+    send_on_slack(
         f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in "
         f"{val_loader.num_batches} batches)"
     )
@@ -233,6 +282,10 @@ def main(args):
         collate_fn=collate_fn,
     )
     print(
+        f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in "
+        f"{train_loader.num_batches} batches)"
+    )
+    send_on_slack(
         f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in "
         f"{train_loader.num_batches} batches)"
     )
@@ -307,9 +360,11 @@ def main(args):
         val_loss, acc = evaluate(model, val_loader, batch_transforms)
         if val_loss < min_loss:
             print(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
+            send_on_slack(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
             model.save_weights(f"./{exp_name}/weights")
             min_loss = val_loss
         print(f"Epoch {epoch + 1}/{args.epochs} - Validation loss: {val_loss:.6} (Acc: {acc:.2%})")
+        send_on_slack(f"Epoch {epoch + 1}/{args.epochs} - Validation loss: {val_loss:.6} (Acc: {acc:.2%})")
         # W&B
         if args.wb:
             wandb.log({
@@ -326,6 +381,7 @@ def main(args):
             logger.report_scalar(title="Accuracy", series="acc", value=acc, iteration=epoch)
         if args.early_stop and early_stopper.early_stop(val_loss):
             print("Training halted early due to reaching patience limit.")
+            send_on_slack("Training halted early due to reaching patience limit.")
             break
     if args.wb:
         run.finish()

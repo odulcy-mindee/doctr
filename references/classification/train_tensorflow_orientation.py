@@ -146,7 +146,7 @@ def fit_one_epoch(model, train_loader, batch_transforms, optimizer, amp=False):
         if current_progress - last_progress > interval_progress:
             send_on_slack(str(pbar))
             last_progress = int(current_progress)
-    send_on_slack(f"Final training loss: {train_loss.numpy():.6}")
+    send_on_slack(f"Final training loss: {train_loss.numpy().mean():.6}")
 
 
 def evaluate(model, val_loader, batch_transforms):

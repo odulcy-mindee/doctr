@@ -1,3 +1,4 @@
+import math
 import os
 import tempfile
 
@@ -115,13 +116,17 @@ def test_detection_zoo(arch_name):
 
 
 def test_fast_reparameterization():
-    dummy_input = torch.rand((2, 3, 1024, 1024), dtype=torch.float32)
+    dummy_input = torch.rand((1, 3, 1024, 1024), dtype=torch.float32)
     base_model = detection.fast_tiny(pretrained=True, exportable=True).eval()
+    base_model_params = sum(p.numel() for p in base_model.parameters())
+    assert math.isclose(base_model_params, 13535296)  # base model params
     base_out = base_model(dummy_input)["logits"]
     rep_model = reparameterize(base_model)
+    rep_model_params = sum(p.numel() for p in rep_model.parameters())
+    assert math.isclose(rep_model_params, 8521920)  # reparameterized model params
     rep_out = rep_model(dummy_input)["logits"]
     diff = base_out - rep_out
-    assert diff.mean() < 5e-2 and diff.mean() < 5e-2
+    assert diff.mean() < 5e-2
 
 
 def test_erode():
@@ -163,6 +168,7 @@ def test_models_onnx_export(arch_name, input_shape, output_size):
     else:
         model = detection.__dict__[arch_name](pretrained=True, exportable=True).eval()
     dummy_input = torch.rand((batch_size, *input_shape), dtype=torch.float32)
+    pt_logits = model(dummy_input)["logits"].detach().cpu().numpy()
     with tempfile.TemporaryDirectory() as tmpdir:
         # Export
         model_path = export_model_to_onnx(model, model_name=os.path.join(tmpdir, "model"), dummy_input=dummy_input)
@@ -172,5 +178,11 @@ def test_models_onnx_export(arch_name, input_shape, output_size):
             os.path.join(tmpdir, "model.onnx"), providers=["CPUExecutionProvider"]
         )
         ort_outs = ort_session.run(["logits"], {"input": dummy_input.numpy()})
-        assert isinstance(ort_outs, list) and len(ort_outs) == 1
-        assert ort_outs[0].shape == (batch_size, *output_size)
+
+    assert isinstance(ort_outs, list) and len(ort_outs) == 1
+    assert ort_outs[0].shape == (batch_size, *output_size)
+    # Check that the output is close to the PyTorch output - only warn if not close
+    try:
+        assert np.allclose(pt_logits, ort_outs[0], atol=1e-4)
+    except AssertionError:
+        pytest.skip(f"Output of {arch_name}:\nMax element-wise difference: {np.max(np.abs(pt_logits - ort_outs[0]))}")

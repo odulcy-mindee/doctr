@@ -4,7 +4,7 @@
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
 import math
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -15,7 +15,7 @@ from torchvision.transforms import transforms as T
 
 from ..functional.pytorch import random_shadow
 
-__all__ = ["Resize", "GaussianNoise", "ChannelShuffle", "RandomHorizontalFlip", "RandomShadow"]
+__all__ = ["Resize", "GaussianNoise", "ChannelShuffle", "RandomHorizontalFlip", "RandomShadow", "RandomResize"]
 
 
 class Resize(T.Resize):
@@ -159,13 +159,16 @@ class RandomHorizontalFlip(T.RandomHorizontalFlip):
     """Randomly flip the input image horizontally"""
 
     def forward(
-        self, img: Union[torch.Tensor, Image], target: Dict[str, Any]
-    ) -> Tuple[Union[torch.Tensor, Image], Dict[str, Any]]:
+        self, img: Union[torch.Tensor, Image], target: np.ndarray
+    ) -> Tuple[Union[torch.Tensor, Image], np.ndarray]:
         if torch.rand(1) < self.p:
             _img = F.hflip(img)
             _target = target.copy()
             # Changing the relative bbox coordinates
-            _target["boxes"][:, ::2] = 1 - target["boxes"][:, [2, 0]]
+            if target.shape[1:] == (4,):
+                _target[:, ::2] = 1 - target[:, [2, 0]]
+            else:
+                _target[..., 0] = 1 - target[..., 0]
             return _img, _target
         return img, target
 
@@ -210,3 +213,58 @@ class RandomShadow(torch.nn.Module):
 
     def extra_repr(self) -> str:
         return f"opacity_range={self.opacity_range}"
+
+
+class RandomResize(torch.nn.Module):
+    """Randomly resize the input image and align corresponding targets
+
+    >>> import torch
+    >>> from doctr.transforms import RandomResize
+    >>> transfo = RandomResize((0.3, 0.9), preserve_aspect_ratio=True, symmetric_pad=True, p=0.5)
+    >>> out = transfo(torch.rand((3, 64, 64)))
+
+    Args:
+    ----
+        scale_range: range of the resizing factor for width and height (independently)
+        preserve_aspect_ratio: whether to preserve the aspect ratio of the image,
+            given a float value, the aspect ratio will be preserved with this probability
+        symmetric_pad: whether to symmetrically pad the image,
+            given a float value, the symmetric padding will be applied with this probability
+        p: probability to apply the transformation
+    """
+
+    def __init__(
+        self,
+        scale_range: Tuple[float, float] = (0.3, 0.9),
+        preserve_aspect_ratio: Union[bool, float] = False,
+        symmetric_pad: Union[bool, float] = False,
+        p: float = 0.5,
+    ) -> None:
+        super().__init__()
+        self.scale_range = scale_range
+        self.preserve_aspect_ratio = preserve_aspect_ratio
+        self.symmetric_pad = symmetric_pad
+        self.p = p
+        self._resize = Resize
+
+    def forward(self, img: torch.Tensor, target: np.ndarray) -> Tuple[torch.Tensor, np.ndarray]:
+        if torch.rand(1) < self.p:
+            scale_h = np.random.uniform(*self.scale_range)
+            scale_w = np.random.uniform(*self.scale_range)
+            new_size = (int(img.shape[-2] * scale_h), int(img.shape[-1] * scale_w))
+
+            _img, _target = self._resize(
+                new_size,
+                preserve_aspect_ratio=self.preserve_aspect_ratio
+                if isinstance(self.preserve_aspect_ratio, bool)
+                else bool(torch.rand(1) <= self.symmetric_pad),
+                symmetric_pad=self.symmetric_pad
+                if isinstance(self.symmetric_pad, bool)
+                else bool(torch.rand(1) <= self.symmetric_pad),
+            )(img, target)
+
+            return _img, _target
+        return img, target
+
+    def extra_repr(self) -> str:
+        return f"scale_range={self.scale_range}, preserve_aspect_ratio={self.preserve_aspect_ratio}, symmetric_pad={self.symmetric_pad}, p={self.p}"  # noqa: E501

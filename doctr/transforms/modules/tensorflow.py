@@ -4,7 +4,7 @@
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
 import random
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
+from typing import Any, Callable, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
 import tensorflow as tf
@@ -30,6 +30,7 @@ __all__ = [
     "GaussianNoise",
     "RandomHorizontalFlip",
     "RandomShadow",
+    "RandomResize",
 ]
 
 
@@ -457,10 +458,7 @@ class RandomHorizontalFlip(NestedObject):
     >>> from doctr.transforms import RandomHorizontalFlip
     >>> transfo = RandomHorizontalFlip(p=0.5)
     >>> image = tf.random.uniform(shape=[64, 64, 3], minval=0, maxval=1)
-    >>> target = {
-    >>> "boxes": np.array([[0.1, 0.1, 0.4, 0.5] ], dtype= np.float32),
-    >>> "labels": np.ones(1, dtype= np.int64)
-    >>> }
+    >>> target = np.array([[0.1, 0.1, 0.4, 0.5] ], dtype= np.float32)
     >>> out = transfo(image, target)
 
     Args:
@@ -472,12 +470,15 @@ class RandomHorizontalFlip(NestedObject):
         super().__init__()
         self.p = p
 
-    def __call__(self, img: Union[tf.Tensor, np.ndarray], target: Dict[str, Any]) -> Tuple[tf.Tensor, Dict[str, Any]]:
+    def __call__(self, img: Union[tf.Tensor, np.ndarray], target: np.ndarray) -> Tuple[tf.Tensor, np.ndarray]:
         if np.random.rand(1) <= self.p:
             _img = tf.image.flip_left_right(img)
             _target = target.copy()
             # Changing the relative bbox coordinates
-            _target["boxes"][:, ::2] = 1 - target["boxes"][:, [2, 0]]
+            if target.shape[1:] == (4,):
+                _target[:, ::2] = 1 - target[:, [2, 0]]
+            else:
+                _target[..., 0] = 1 - target[..., 0]
             return _img, _target
         return img, target
 
@@ -515,3 +516,58 @@ class RandomShadow(NestedObject):
 
     def extra_repr(self) -> str:
         return f"opacity_range={self.opacity_range}"
+
+
+class RandomResize(NestedObject):
+    """Randomly resize the input image and align corresponding targets
+
+    >>> import tensorflow as tf
+    >>> from doctr.transforms import RandomResize
+    >>> transfo = RandomResize((0.3, 0.9), preserve_aspect_ratio=True, symmetric_pad=True, p=0.5)
+    >>> out = transfo(tf.random.uniform(shape=[64, 64, 3], minval=0, maxval=1))
+
+    Args:
+    ----
+        scale_range: range of the resizing factor for width and height (independently)
+        preserve_aspect_ratio: whether to preserve the aspect ratio of the image,
+            given a float value, the aspect ratio will be preserved with this probability
+        symmetric_pad: whether to symmetrically pad the image,
+            given a float value, the symmetric padding will be applied with this probability
+        p: probability to apply the transformation
+    """
+
+    def __init__(
+        self,
+        scale_range: Tuple[float, float] = (0.3, 0.9),
+        preserve_aspect_ratio: Union[bool, float] = False,
+        symmetric_pad: Union[bool, float] = False,
+        p: float = 0.5,
+    ):
+        super().__init__()
+        self.scale_range = scale_range
+        self.preserve_aspect_ratio = preserve_aspect_ratio
+        self.symmetric_pad = symmetric_pad
+        self.p = p
+        self._resize = Resize
+
+    def __call__(self, img: tf.Tensor, target: np.ndarray) -> Tuple[tf.Tensor, np.ndarray]:
+        if np.random.rand(1) <= self.p:
+            scale_h = random.uniform(*self.scale_range)
+            scale_w = random.uniform(*self.scale_range)
+            new_size = (int(img.shape[-3] * scale_h), int(img.shape[-2] * scale_w))
+
+            _img, _target = self._resize(
+                new_size,
+                preserve_aspect_ratio=self.preserve_aspect_ratio
+                if isinstance(self.preserve_aspect_ratio, bool)
+                else bool(np.random.rand(1) <= self.symmetric_pad),
+                symmetric_pad=self.symmetric_pad
+                if isinstance(self.symmetric_pad, bool)
+                else bool(np.random.rand(1) <= self.symmetric_pad),
+            )(img, target)
+
+            return _img, _target
+        return img, target
+
+    def extra_repr(self) -> str:
+        return f"scale_range={self.scale_range}, preserve_aspect_ratio={self.preserve_aspect_ratio}, symmetric_pad={self.symmetric_pad}, p={self.p}"  # noqa: E501

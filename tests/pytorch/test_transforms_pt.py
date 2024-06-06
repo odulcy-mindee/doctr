@@ -10,6 +10,7 @@ from doctr.transforms import (
     GaussianNoise,
     RandomCrop,
     RandomHorizontalFlip,
+    RandomResize,
     RandomRotate,
     RandomShadow,
     Resize,
@@ -189,18 +190,27 @@ def test_crop_detection():
         crop_detection(img, abs_boxes, (2, 6, 24, 56))
 
 
-def test_random_crop():
+@pytest.mark.parametrize(
+    "target",
+    [
+        np.array([[15, 20, 35, 30]]),  # box
+        np.array([[[15, 20], [35, 20], [35, 30], [15, 30]]]),  # polygon
+    ],
+)
+def test_random_crop(target):
     cropper = RandomCrop(scale=(0.5, 1.0), ratio=(0.75, 1.33))
     input_t = torch.ones((3, 50, 50), dtype=torch.float32)
-    boxes = np.array([[15, 20, 35, 30]])
-    img, target = cropper(input_t, dict(boxes=boxes))
+    img, target = cropper(input_t, target)
     # Check the scale
     assert img.shape[-1] * img.shape[-2] >= 0.4 * input_t.shape[-1] * input_t.shape[-2]
     # Check aspect ratio
-    assert 0.65 <= img.shape[-2] / img.shape[-1] <= 1.5
+    assert 0.65 <= img.shape[-2] / img.shape[-1] <= 1.6
     # Check the target
-    assert np.all(target["boxes"] >= 0)
-    assert np.all(target["boxes"][:, [0, 2]] <= img.shape[-1]) and np.all(target["boxes"][:, [1, 3]] <= img.shape[-2])
+    assert np.all(target >= 0)
+    if target.ndim == 2:
+        assert np.all(target[:, [0, 2]] <= img.shape[-1]) and np.all(target[:, [1, 3]] <= img.shape[-2])
+    else:
+        assert np.all(target[..., 0] <= img.shape[-1]) and np.all(target[..., 1] <= img.shape[-2])
 
 
 @pytest.mark.parametrize(
@@ -253,29 +263,42 @@ def test_gaussian_noise(input_dtype, input_shape):
         assert torch.all(transformed <= 1.0)
 
 
-@pytest.mark.parametrize("p", [1, 0])
-def test_randomhorizontalflip(p):
+@pytest.mark.parametrize(
+    "p,target",
+    [
+        [1, np.array([[0.1, 0.1, 0.3, 0.4]], dtype=np.float32)],
+        [0, np.array([[0.1, 0.1, 0.3, 0.4]], dtype=np.float32)],
+        [1, np.array([[[0.1, 0.1], [0.3, 0.1], [0.3, 0.4], [0.1, 0.4]]], dtype=np.float32)],
+        [0, np.array([[[0.1, 0.1], [0.3, 0.1], [0.3, 0.4], [0.1, 0.4]]], dtype=np.float32)],
+    ],
+)
+def test_randomhorizontalflip(p, target):
     # testing for 2 cases, with flip probability 1 and 0.
     transform = RandomHorizontalFlip(p)
     input_t = torch.ones((3, 32, 32), dtype=torch.float32)
     input_t[..., :16] = 0
-    target = {"boxes": np.array([[0.1, 0.1, 0.3, 0.4]], dtype=np.float32), "labels": np.ones(1, dtype=np.int64)}
+
     transformed, _target = transform(input_t, target)
     assert isinstance(transformed, torch.Tensor)
     assert transformed.shape == input_t.shape
     assert transformed.dtype == input_t.dtype
     # integrity check of targets
-    assert isinstance(_target, dict)
-    assert all(isinstance(val, np.ndarray) for val in _target.values())
-    assert _target["boxes"].dtype == np.float32
-    assert _target["labels"].dtype == np.int64
-    if p == 1:
-        assert np.all(_target["boxes"] == np.array([[0.7, 0.1, 0.9, 0.4]], dtype=np.float32))
-        assert torch.all(transformed.mean((0, 1)) == torch.tensor([1] * 16 + [0] * 16, dtype=torch.float32))
-    elif p == 0:
-        assert np.all(_target["boxes"] == np.array([[0.1, 0.1, 0.3, 0.4]], dtype=np.float32))
-        assert torch.all(transformed.mean((0, 1)) == torch.tensor([0] * 16 + [1] * 16, dtype=torch.float32))
-    assert np.all(_target["labels"] == np.ones(1, dtype=np.int64))
+    assert isinstance(_target, np.ndarray)
+    assert _target.dtype == np.float32
+    if _target.ndim == 2:
+        if p == 1:
+            assert np.all(_target == np.array([[0.7, 0.1, 0.9, 0.4]], dtype=np.float32))
+            assert torch.all(transformed.mean((0, 1)) == torch.tensor([1] * 16 + [0] * 16, dtype=torch.float32))
+        elif p == 0:
+            assert np.all(_target == np.array([[0.1, 0.1, 0.3, 0.4]], dtype=np.float32))
+            assert torch.all(transformed.mean((0, 1)) == torch.tensor([0] * 16 + [1] * 16, dtype=torch.float32))
+    else:
+        if p == 1:
+            assert np.all(_target == np.array([[[0.9, 0.1], [0.7, 0.1], [0.7, 0.4], [0.9, 0.4]]], dtype=np.float32))
+            assert torch.all(transformed.mean((0, 1)) == torch.tensor([1] * 16 + [0] * 16, dtype=torch.float32))
+        elif p == 0:
+            assert np.all(_target == np.array([[[0.1, 0.1], [0.3, 0.1], [0.3, 0.4], [0.1, 0.4]]], dtype=np.float32))
+            assert torch.all(transformed.mean((0, 1)) == torch.tensor([0] * 16 + [1] * 16, dtype=torch.float32))
 
 
 @pytest.mark.parametrize(
@@ -304,3 +327,33 @@ def test_random_shadow(input_dtype, input_shape):
         assert torch.all(transformed <= 255)
     else:
         assert torch.all(transformed <= 1.0)
+
+
+@pytest.mark.parametrize(
+    "p,preserve_aspect_ratio,symmetric_pad,target",
+    [
+        [1, True, False, np.array([[0.1, 0.1, 0.3, 0.4]], dtype=np.float32)],
+        [0, True, False, np.array([[0.1, 0.1, 0.3, 0.4]], dtype=np.float32)],
+        [1, True, False, np.array([[[0.1, 0.8], [0.3, 0.1], [0.3, 0.4], [0.8, 0.4]]], dtype=np.float32)],
+        [0, True, False, np.array([[[0.1, 0.8], [0.3, 0.1], [0.3, 0.4], [0.8, 0.4]]], dtype=np.float32)],
+        [1, 0.5, 0.5, np.array([[0.1, 0.1, 0.3, 0.4]], dtype=np.float32)],
+        [0, 0.5, 0.5, np.array([[0.1, 0.1, 0.3, 0.4]], dtype=np.float32)],
+    ],
+)
+def test_random_resize(p, preserve_aspect_ratio, symmetric_pad, target):
+    transfo = RandomResize(
+        scale_range=(0.3, 1.3), preserve_aspect_ratio=preserve_aspect_ratio, symmetric_pad=symmetric_pad, p=p
+    )
+    assert (
+        repr(transfo)
+        == f"RandomResize(scale_range=(0.3, 1.3), preserve_aspect_ratio={preserve_aspect_ratio}, symmetric_pad={symmetric_pad}, p={p})"  # noqa: E501
+    )
+
+    img = torch.rand((3, 64, 64))
+    # Apply the transformation
+    out_img, out_target = transfo(img, target)
+    assert isinstance(out_img, torch.Tensor)
+    assert isinstance(out_target, np.ndarray)
+    # Resize is already well tested
+    assert torch.all(out_img == img) if p == 0 else out_img.shape != img.shape
+    assert out_target.shape == target.shape

@@ -4,6 +4,10 @@
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
 import os
+from pathlib import Path
+from doctr.file_utils import CLASS_NAME
+from doctr import datasets
+
 
 os.environ["USE_TORCH"] = "1"
 
@@ -12,6 +16,7 @@ import hashlib
 import logging
 import multiprocessing as mp
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -26,6 +31,32 @@ from doctr.datasets import DetectionDataset
 from doctr.models import detection, login_to_hub, push_to_hf_hub
 from doctr.utils.metrics import LocalizationConfusion
 from utils import EarlyStopper, plot_recorder, plot_samples
+
+SLACK_WEBHOOK_URL = None
+SLACK_WEBHOOK_PATH = Path(os.path.join(os.path.expanduser("~"), ".config", "doctr", "slack_webhook_url.txt"))
+if SLACK_WEBHOOK_PATH.exists():
+    with open(SLACK_WEBHOOK_PATH) as f:
+        SLACK_WEBHOOK_URL = f.read().strip()
+else:
+    print(f"{SLACK_WEBHOOK_PATH} does not exist, skip Slack integration configuration...")
+
+
+def send_on_slack(text: str):
+    """Send a message on Slack.
+
+    Args:
+        text (str): message to send on Slack
+    """
+    if SLACK_WEBHOOK_URL:
+        try:
+            import requests
+
+            requests.post(
+                url=SLACK_WEBHOOK_URL,
+                json={"text": f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]: {text}"},
+            )
+        except Exception:
+            print("Impossible to send message on Slack, continue...")
 
 
 def record_lr(
@@ -105,7 +136,10 @@ def fit_one_epoch(model, train_loader, batch_transforms, optimizer, scheduler, a
 
     model.train()
     # Iterate over the batches of the dataset
+    last_progress = 0
+    interval_progress = 5
     pbar = tqdm(train_loader, position=1)
+    send_on_slack(str(pbar))
     for images, targets in pbar:
         if torch.cuda.is_available():
             images = images.cuda()
@@ -129,8 +163,12 @@ def fit_one_epoch(model, train_loader, batch_transforms, optimizer, scheduler, a
             optimizer.step()
 
         scheduler.step()
-
         pbar.set_description(f"Training loss: {train_loss.item():.6}")
+        current_progress = pbar.n / pbar.total * 100
+        if current_progress - last_progress > interval_progress:
+            send_on_slack(str(pbar))
+            last_progress = int(current_progress)
+    send_on_slack(f"Final training loss: {train_loss.item():.6}")
 
 
 @torch.no_grad()
@@ -139,9 +177,13 @@ def evaluate(model, val_loader, batch_transforms, val_metric, amp=False):
     model.eval()
     # Reset val metric
     val_metric.reset()
+    last_progress = 0
+    interval_progress = 5
+    pbar = tqdm(val_loader)
+    send_on_slack(str(pbar))
     # Validation loop
     val_loss, batch_cnt = 0, 0
-    for images, targets in tqdm(val_loader):
+    for images, targets in pbar:
         if torch.cuda.is_available():
             images = images.cuda()
         images = batch_transforms(images)
@@ -159,6 +201,10 @@ def evaluate(model, val_loader, batch_transforms, val_metric, amp=False):
                     boxes_pred = np.concatenate((boxes_pred[:, :4].min(axis=1), boxes_pred[:, :4].max(axis=1)), axis=-1)
                 val_metric.update(gts=boxes_gt, preds=boxes_pred[:, :4])
 
+        current_progress = pbar.n / pbar.total * 100
+        if current_progress - last_progress > interval_progress:
+            send_on_slack(str(pbar))
+            last_progress = int(current_progress)
         val_loss += out["loss"].item()
         batch_cnt += 1
 
@@ -169,6 +215,7 @@ def evaluate(model, val_loader, batch_transforms, val_metric, amp=False):
 
 def main(args):
     print(args)
+    send_on_slack(f"Start training: {args}")
 
     if args.push_to_hub:
         login_to_hub()
@@ -210,10 +257,80 @@ def main(args):
         collate_fn=val_set.collate_fn,
     )
     print(f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in " f"{len(val_loader)} batches)")
+    send_on_slack(
+        f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in " f"{len(val_loader)} batches)"
+    )
     with open(os.path.join(args.val_path, "labels.json"), "rb") as f:
         val_hash = hashlib.sha256(f.read()).hexdigest()
 
     batch_transforms = Normalize(mean=(0.798, 0.785, 0.772), std=(0.264, 0.2749, 0.287))
+
+    #funsd_ds = DetectionDataset(
+    #    img_folder=os.path.join(args.funsd_path, "images"),
+    #    label_path=os.path.join(args.funsd_path, "labels.json"),
+    #    sample_transforms=T.SampleCompose(
+    #        (
+    #            [T.Resize((args.input_size, args.input_size), preserve_aspect_ratio=True, symmetric_pad=True)]
+    #            if not args.rotation or args.eval_straight
+    #            else []
+    #        )
+    #        + (
+    #            [
+    #                T.Resize(args.input_size, preserve_aspect_ratio=True),  # This does not pad
+    #                T.RandomApply(T.RandomRotate(90, expand=True), 0.5),
+    #                T.Resize((args.input_size, args.input_size), preserve_aspect_ratio=True, symmetric_pad=True),
+    #            ]
+    #            if args.rotation and not args.eval_straight
+    #            else []
+    #        )
+    #    ),
+    #    use_polygons=args.rotation and not args.eval_straight,
+    #)
+
+    #funsd_test_loader = DataLoader(
+    #    funsd_ds,
+    #    batch_size=args.batch_size,
+    #    drop_last=False,
+    #    num_workers=args.workers,
+    #    sampler=SequentialSampler(funsd_ds),
+    #    pin_memory=torch.cuda.is_available(),
+    #    collate_fn=funsd_ds.collate_fn,
+    #)
+    #print(f"FUNSD Test set loaded in {time.time() - st:.4}s ({len(funsd_ds)} samples in " f"{len(funsd_test_loader)} batches)")
+
+
+    #cord_ds = DetectionDataset(
+    #    img_folder=os.path.join(args.cord_path, "images"),
+    #    label_path=os.path.join(args.cord_path, "labels.json"),
+    #    sample_transforms=T.SampleCompose(
+    #        (
+    #            [T.Resize((args.input_size, args.input_size), preserve_aspect_ratio=True, symmetric_pad=True)]
+    #            if not args.rotation or args.eval_straight
+    #            else []
+    #        )
+    #        + (
+    #            [
+    #                T.Resize(args.input_size, preserve_aspect_ratio=True),  # This does not pad
+    #                T.RandomApply(T.RandomRotate(90, expand=True), 0.5),
+    #                T.Resize((args.input_size, args.input_size), preserve_aspect_ratio=True, symmetric_pad=True),
+    #            ]
+    #            if args.rotation and not args.eval_straight
+    #            else []
+    #        )
+    #    ),
+    #    use_polygons=args.rotation and not args.eval_straight,
+    #)
+
+    #cord_test_loader = DataLoader(
+    #    cord_ds,
+    #    batch_size=args.batch_size,
+    #    drop_last=False,
+    #    num_workers=args.workers,
+    #    sampler=SequentialSampler(cord_ds),
+    #    pin_memory=torch.cuda.is_available(),
+    #    collate_fn=cord_ds.collate_fn,
+    #)
+    #print(f"CORD Test set loaded in {time.time() - st:.4}s ({len(cord_ds)} samples in " f"{len(funsd_test_loader)} batches)")
 
     # Load doctr model
     model = detection.__dict__[args.arch](
@@ -225,6 +342,7 @@ def main(args):
     # Resume weights
     if isinstance(args.resume, str):
         print(f"Resuming {args.resume}")
+        send_on_slack(f"Resuming {args.resume}")
         checkpoint = torch.load(args.resume, map_location="cpu")
         model.load_state_dict(checkpoint)
 
@@ -244,6 +362,16 @@ def main(args):
         model = model.cuda()
 
     # Metrics
+    #funsd_val_metric = LocalizationConfusion(
+    #    use_polygons=args.rotation and not args.eval_straight,
+    #    mask_shape=(args.input_size, args.input_size),
+    #    use_broadcasting=True if system_available_memory > 62 else False,
+    #)
+    #cord_val_metric = LocalizationConfusion(
+    #    use_polygons=args.rotation and not args.eval_straight,
+    #    mask_shape=(args.input_size, args.input_size),
+    #    use_broadcasting=True if system_available_memory > 62 else False,
+    #)
     val_metric = LocalizationConfusion(use_polygons=args.rotation and not args.eval_straight)
 
     if args.test_only:
@@ -317,6 +445,9 @@ def main(args):
         collate_fn=train_set.collate_fn,
     )
     print(f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in " f"{len(train_loader)} batches)")
+    send_on_slack(
+        f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in " f"{len(train_loader)} batches)"
+    )
     with open(os.path.join(args.train_path, "labels.json"), "rb") as f:
         train_hash = hashlib.sha256(f.read()).hexdigest()
 
@@ -388,8 +519,23 @@ def main(args):
         fit_one_epoch(model, train_loader, batch_transforms, optimizer, scheduler, amp=args.amp)
         # Validation loop at the end of each epoch
         val_loss, recall, precision, mean_iou = evaluate(model, val_loader, batch_transforms, val_metric, amp=args.amp)
+        funsd_recall, funsd_precision, funsd_mean_iou = 0.0, 0.0, 0.0
+        cord_recall, cord_precision, cord_mean_iou = 0.0, 0.0, 0.0
+        #try:
+        #    _, funsd_recall, funsd_precision, funsd_mean_iou = evaluate(
+        #        model, funsd_test_loader, batch_transforms, funsd_val_metric, amp=args.amp
+        #    )
+        #except Exception:
+        #    pass
+        #try:
+        #    _, cord_recall, cord_precision, cord_mean_iou = evaluate(
+        #        model, cord_test_loader, batch_transforms, cord_val_metric, amp=args.amp
+        #    )
+        #except Exception:
+        #    pass
         if val_loss < min_loss:
             print(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
+            send_on_slack(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
             torch.save(model.state_dict(), f"./{exp_name}.pt")
             min_loss = val_loss
         if args.save_interval_epoch:
@@ -399,16 +545,21 @@ def main(args):
         if any(val is None for val in (recall, precision, mean_iou)):
             log_msg += "(Undefined metric value, caused by empty GTs or predictions)"
         else:
-            log_msg += f"(Recall: {recall:.2%} | Precision: {precision:.2%} | Mean IoU: {mean_iou:.2%})"
+            log_msg += f"(Recall: {recall:.2%} | Precision: {precision:.2%} | Mean IoU: {mean_iou:.2%})\n"
+            log_msg += f"FUNSD: Recall: {funsd_recall:.2%} | Precision: {funsd_precision:.2%} | Mean IoU: {funsd_mean_iou:.2%}\n"
+            log_msg += f"CORD: Recall: {cord_recall:.2%} | Precision: {cord_precision:.2%} | Mean IoU: {cord_mean_iou:.2%}"
         print(log_msg)
+        send_on_slack(log_msg)
         # W&B
         if args.wb:
-            wandb.log({
-                "val_loss": val_loss,
-                "recall": recall,
-                "precision": precision,
-                "mean_iou": mean_iou,
-            })
+            wandb.log(
+                {
+                    "val_loss": val_loss,
+                    "recall": recall,
+                    "precision": precision,
+                    "mean_iou": mean_iou,
+                }
+            )
         if args.early_stop and early_stopper.early_stop(val_loss):
             print("Training halted early due to reaching patience limit.")
             break

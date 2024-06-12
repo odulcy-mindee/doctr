@@ -146,75 +146,54 @@ def record_lr(
     return lr_recorder[: len(loss_recorder)], loss_recorder
 
 
-def fit_one_epoch(model, train_loader, batch_transforms, optimizer, scheduler, amp=False):
-    if amp:
-        scaler = torch.cuda.amp.GradScaler()
-
-    model.train()
+def fit_one_epoch(model, train_loader, batch_transforms, optimizer, amp=False):
     # Iterate over the batches of the dataset
     last_progress = 0
     interval_progress = 5
     pbar = tqdm(train_loader, position=1)
     send_on_slack(str(pbar))
+    import tensorflow as tf
     for images, targets in pbar:
-        if torch.cuda.is_available():
-            images = images.cuda()
-            targets = targets.cuda()
-
         images = batch_transforms(images)
 
-        optimizer.zero_grad()
+        images = tf.convert_to_tensor(images)
+        images = tf.transpose(images, (0, 3, 2, 1))
+        with tf.GradientTape() as tape:
+            out = model(images, training=True)
+            train_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(targets, out)
+        grads = tape.gradient(train_loss, model.trainable_weights)
         if amp:
-            with torch.cuda.amp.autocast():
-                out = model(images)
-                train_loss = cross_entropy(out, targets)
-            scaler.scale(train_loss).backward()
-            # Update the params
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            out = model(images)
-            train_loss = cross_entropy(out, targets)
-            train_loss.backward()
-            optimizer.step()
-        scheduler.step()
+            grads = optimizer.get_unscaled_gradients(grads)
+        optimizer.apply_gradients(zip(grads, model.trainable_weights))
 
-        pbar.set_description(f"Training loss: {train_loss.item():.6}")
+        pbar.set_description(f"Training loss: {train_loss.numpy().mean():.6}")
         current_progress = pbar.n / pbar.total * 100
         if current_progress - last_progress > interval_progress:
             send_on_slack(str(pbar))
             last_progress = int(current_progress)
-    send_on_slack(f"Final training loss: {train_loss.item():.6}")
+    send_on_slack(str(pbar))
+    #send_on_slack(f"Final training loss: {train_loss.item():.6}")
 
 
-@torch.no_grad()
-def evaluate(model, val_loader, batch_transforms, amp=False):
-    # Model in eval mode
-    model.eval()
+def evaluate(model, val_loader, batch_transforms):
+    # Validation loop
     last_progress = 0
     interval_progress = 5
-    pbar = tqdm(val_loader)
-    send_on_slack(str(pbar))
-    # Validation loop
     val_loss, correct, samples, batch_cnt = 0.0, 0.0, 0.0, 0.0
+    val_iter = iter(val_loader)
+    pbar = tqdm(val_iter)
+    send_on_slack(str(pbar))
+    import tensorflow as tf
     for images, targets in pbar:
         images = batch_transforms(images)
-
-        if torch.cuda.is_available():
-            images = images.cuda()
-            targets = targets.cuda()
-
-        if amp:
-            with torch.cuda.amp.autocast():
-                out = model(images)
-                loss = cross_entropy(out, targets)
-        else:
-            out = model(images)
-            loss = cross_entropy(out, targets)
+        images = tf.convert_to_tensor(images)
+        images = tf.transpose(images, (0, 3, 2, 1))
+        out = model(images, training=False)
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(targets, out)
         # Compute metric
-        correct += (out.argmax(dim=1) == targets).sum().item()
+        correct += int((out.numpy().argmax(1) == targets.numpy()).sum())
 
-        val_loss += loss.item()
+        val_loss += loss.numpy().mean()
         batch_cnt += 1
         samples += images.shape[0]
 
@@ -270,7 +249,8 @@ def main(args):
     batch_transforms = Normalize(mean=(0.694, 0.695, 0.693), std=(0.299, 0.296, 0.301))
 
     # Load doctr model
-    model = classification.__dict__[args.arch](pretrained=args.pretrained, num_classes=len(CLASSES), classes=CLASSES)
+    import doctr.models.classification.mobilenet.tensorflow as classification_tf
+    model = classification_tf.__dict__[args.arch](pretrained=args.pretrained, num_classes=len(CLASSES), classes=CLASSES)
 
     # Resume weights
     if isinstance(args.resume, str):
@@ -280,19 +260,19 @@ def main(args):
         model.load_state_dict(checkpoint)
 
     # GPU
-    if isinstance(args.device, int):
-        if not torch.cuda.is_available():
-            raise AssertionError("PyTorch cannot access your GPU. Please investigate!")
-        if args.device >= torch.cuda.device_count():
-            raise ValueError("Invalid device index")
-    # Silent default switch to GPU if available
-    elif torch.cuda.is_available():
-        args.device = 0
-    else:
-        logging.warning("No accessible GPU, targe device set to CPU.")
-    if torch.cuda.is_available():
-        torch.cuda.set_device(args.device)
-        model = model.cuda()
+    #if isinstance(args.device, int):
+    #    if not torch.cuda.is_available():
+    #        raise AssertionError("PyTorch cannot access your GPU. Please investigate!")
+    #    if args.device >= torch.cuda.device_count():
+    #        raise ValueError("Invalid device index")
+    ## Silent default switch to GPU if available
+    #elif torch.cuda.is_available():
+    #    args.device = 0
+    #else:
+    #    logging.warning("No accessible GPU, targe device set to CPU.")
+    #if torch.cuda.is_available():
+    #    torch.cuda.set_device(args.device)
+    #    model = model.cuda()
 
     if args.test_only:
         print("Running evaluation")
@@ -339,12 +319,26 @@ def main(args):
         return
 
     # Optimizer
-    optimizer = torch.optim.Adam(
-        [p for p in model.parameters() if p.requires_grad],
+    #optimizer = torch.optim.Adam(
+    #    [p for p in model.parameters() if p.requires_grad],
+    #    args.lr,
+    #    betas=(0.95, 0.99),
+    #    eps=1e-6,
+    #    weight_decay=args.weight_decay,
+    #)
+    import tensorflow as tf
+    scheduler = tf.keras.optimizers.schedules.ExponentialDecay(
         args.lr,
-        betas=(0.95, 0.99),
-        eps=1e-6,
-        weight_decay=args.weight_decay,
+        decay_steps=args.epochs * len(train_loader),
+        decay_rate=1 / (1e3),  # final lr as a fraction of initial lr
+        staircase=False,
+        name="ExponentialDecay",
+    )
+    optimizer = tf.keras.optimizers.Adam(
+        learning_rate=scheduler,
+        beta_1=0.95,
+        beta_2=0.99,
+        epsilon=1e-6,
     )
 
     # LR Finder
@@ -352,11 +346,11 @@ def main(args):
         lrs, losses = record_lr(model, train_loader, batch_transforms, optimizer, amp=args.amp)
         plot_recorder(lrs, losses)
         return
-    # Scheduler
-    if args.sched == "cosine":
-        scheduler = CosineAnnealingLR(optimizer, args.epochs * len(train_loader), eta_min=args.lr / 25e4)
-    elif args.sched == "onecycle":
-        scheduler = OneCycleLR(optimizer, args.lr, args.epochs * len(train_loader))
+    ## Scheduler
+    #if args.sched == "cosine":
+    #    scheduler = CosineAnnealingLR(optimizer, args.epochs * len(train_loader), eta_min=args.lr / 25e4)
+    #elif args.sched == "onecycle":
+    #    scheduler = OneCycleLR(optimizer, args.lr, args.epochs * len(train_loader))
 
     # Training monitoring
     current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -388,27 +382,32 @@ def main(args):
     if args.early_stop:
         early_stopper = EarlyStopper(patience=args.early_stop_epochs, min_delta=args.early_stop_delta)
     for epoch in range(args.epochs):
-        fit_one_epoch(model, train_loader, batch_transforms, optimizer, scheduler)
+        fit_one_epoch(model, train_loader, batch_transforms, optimizer)
+        model.save_weights(f"./{exp_name}_{epoch}/weights")
 
-        # Validation loop at the end of each epoch
-        val_loss, acc = evaluate(model, val_loader, batch_transforms)
-        if val_loss < min_loss:
-            print(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
-            send_on_slack(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
-            torch.save(model.state_dict(), f"./{exp_name}.pt")
-            min_loss = val_loss
-        print(f"Epoch {epoch + 1}/{args.epochs} - Validation loss: {val_loss:.6} (Acc: {acc:.2%})")
-        send_on_slack(f"Epoch {epoch + 1}/{args.epochs} - Validation loss: {val_loss:.6} (Acc: {acc:.2%})")
-        # W&B
-        if args.wb:
-            wandb.log({
-                "val_loss": val_loss,
-                "acc": acc,
-            })
-        if args.early_stop and early_stopper.early_stop(val_loss):
-            print("Training halted early due to reaching patience limit.")
-            send_on_slack("Training halted early due to reaching patience limit.")
-            break
+        try:
+            # Validation loop at the end of each epoch
+            val_loss, acc = evaluate(model, val_loader, batch_transforms)
+            if val_loss < min_loss:
+                print(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
+                send_on_slack(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
+                model.save_weights(f"./{exp_name}/weights")
+                min_loss = val_loss
+            print(f"Epoch {epoch + 1}/{args.epochs} - Validation loss: {val_loss:.6} (Acc: {acc:.2%})")
+            send_on_slack(f"Epoch {epoch + 1}/{args.epochs} - Validation loss: {val_loss:.6} (Acc: {acc:.2%})")
+        except Exception:
+            import traceback
+            traceback.print_exc()
+        ## W&B
+        #if args.wb:
+        #    wandb.log({
+        #        "val_loss": val_loss,
+        #        "acc": acc,
+        #    })
+        #if args.early_stop and early_stopper.early_stop(val_loss):
+        #    print("Training halted early due to reaching patience limit.")
+        #    send_on_slack("Training halted early due to reaching patience limit.")
+        #    break
     if args.wb:
         run.finish()
 

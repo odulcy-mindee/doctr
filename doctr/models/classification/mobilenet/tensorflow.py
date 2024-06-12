@@ -67,7 +67,7 @@ default_cfgs: Dict[str, Dict[str, Any]] = {
         "std": (0.299, 0.296, 0.301),
         "input_shape": (512, 512, 3),
         "classes": [0, -90, 180, 90],
-        "url": None,
+        "url": "https://doctr-static.mindee.com/models?id=v0.8.1/mobilenet_v3_small_page_orientation-aec9553e.zip&src=0",
     },
 }
 
@@ -421,15 +421,18 @@ def mobilenet_v3_small_page_orientation(pretrained: bool = False, **kwargs: Any)
     """MobileNetV3-Small architecture as described in
     `"Searching for MobileNetV3",
     <https://arxiv.org/pdf/1905.02244.pdf>`_.
+
     >>> import tensorflow as tf
     >>> from doctr.models import mobilenet_v3_small_page_orientation
     >>> model = mobilenet_v3_small_page_orientation(pretrained=False)
     >>> input_tensor = tf.random.uniform(shape=[1, 512, 512, 3], maxval=1, dtype=tf.float32)
     >>> out = model(input_tensor)
+
     Args:
     ----
         pretrained: boolean, True if model is pretrained
         **kwargs: keyword arguments of the MobileNetV3 architecture
+
     Returns:
     -------
         a keras.Model

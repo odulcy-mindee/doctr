@@ -10,10 +10,10 @@ import torch
 from torch import nn
 
 from doctr.io.elements import Document
-from doctr.models._utils import estimate_orientation, get_language, invert_data_structure
+from doctr.models._utils import get_language, invert_data_structure
 from doctr.models.detection.predictor import DetectionPredictor
 from doctr.models.recognition.predictor import RecognitionPredictor
-from doctr.utils.geometry import rotate_image
+from doctr.utils.geometry import detach_scores
 
 from .base import _KIEPredictor
 
@@ -55,7 +55,13 @@ class KIEPredictor(nn.Module, _KIEPredictor):
         self.det_predictor = det_predictor.eval()  # type: ignore[attr-defined]
         self.reco_predictor = reco_predictor.eval()  # type: ignore[attr-defined]
         _KIEPredictor.__init__(
-            self, assume_straight_pages, straighten_pages, preserve_aspect_ratio, symmetric_pad, **kwargs
+            self,
+            assume_straight_pages,
+            straighten_pages,
+            preserve_aspect_ratio,
+            symmetric_pad,
+            detect_orientation,
+            **kwargs,
         )
         self.detect_orientation = detect_orientation
         self.detect_language = detect_language
@@ -83,23 +89,28 @@ class KIEPredictor(nn.Module, _KIEPredictor):
             for out_map in out_maps
         ]
         if self.detect_orientation:
-            origin_page_orientations = [estimate_orientation(seq_map) for seq_map in seg_maps]
+            general_pages_orientations, origin_pages_orientations = self._get_orientations(pages, seg_maps)  # type: ignore[arg-type]
             orientations = [
-                {"value": orientation_page, "confidence": None} for orientation_page in origin_page_orientations
+                {"value": orientation_page, "confidence": None} for orientation_page in origin_pages_orientations
             ]
         else:
             orientations = None
+            general_pages_orientations = None
+            origin_pages_orientations = None
         if self.straighten_pages:
-            origin_page_orientations = (
-                origin_page_orientations
-                if self.detect_orientation
-                else [estimate_orientation(seq_map) for seq_map in seg_maps]
-            )
-            pages = [rotate_image(page, -angle, expand=False) for page, angle in zip(pages, origin_page_orientations)]  # type: ignore[arg-type]
+            pages = self._straighten_pages(pages, seg_maps, general_pages_orientations, origin_pages_orientations)  # type: ignore
             # Forward again to get predictions on straight pages
             loc_preds = self.det_predictor(pages, **kwargs)
 
         dict_loc_preds: Dict[str, List[np.ndarray]] = invert_data_structure(loc_preds)  # type: ignore[assignment]
+
+        # Detach objectness scores from loc_preds
+        objectness_scores = {}
+        for class_name, det_preds in dict_loc_preds.items():
+            _loc_preds, _scores = detach_scores(det_preds)
+            dict_loc_preds[class_name] = _loc_preds
+            objectness_scores[class_name] = _scores
+
         # Check whether crop mode should be switched to channels first
         channels_last = len(pages) == 0 or isinstance(pages[0], np.ndarray)
 
@@ -144,6 +155,7 @@ class KIEPredictor(nn.Module, _KIEPredictor):
             )
 
         boxes_per_page: List[Dict] = invert_data_structure(boxes)  # type: ignore[assignment]
+        objectness_scores_per_page: List[Dict] = invert_data_structure(objectness_scores)  # type: ignore[assignment]
         text_preds_per_page: List[Dict] = invert_data_structure(text_preds)  # type: ignore[assignment]
         crop_orientations_per_page: List[Dict] = invert_data_structure(word_crop_orientations)  # type: ignore[assignment]
 
@@ -156,6 +168,7 @@ class KIEPredictor(nn.Module, _KIEPredictor):
         out = self.doc_builder(
             pages,  # type: ignore[arg-type]
             boxes_per_page,
+            objectness_scores_per_page,
             text_preds_per_page,
             origin_page_shapes,  # type: ignore[arg-type]
             crop_orientations_per_page,

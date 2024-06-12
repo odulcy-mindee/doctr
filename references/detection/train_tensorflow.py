@@ -10,7 +10,6 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
 import datetime
 import hashlib
-import multiprocessing as mp
 import time
 from pathlib import Path
 
@@ -149,8 +148,8 @@ def evaluate(model, val_loader, batch_transforms, val_metric):
         for target, loc_pred in zip(targets, loc_preds):
             for boxes_gt, boxes_pred in zip(target.values(), loc_pred.values()):
                 if args.rotation and args.eval_straight:
-                    # Convert pred to boxes [xmin, ymin, xmax, ymax]  N, 4, 2 --> N, 4
-                    boxes_pred = np.concatenate((boxes_pred.min(axis=1), boxes_pred.max(axis=1)), axis=-1)
+                    # Convert pred to boxes [xmin, ymin, xmax, ymax]  N, 5, 2 (with scores) --> N, 4
+                    boxes_pred = np.concatenate((boxes_pred[:, :4].min(axis=1), boxes_pred[:, :4].max(axis=1)), axis=-1)
                 val_metric.update(gts=boxes_gt, preds=boxes_pred[:, :4])
 
         val_loss += out["loss"].numpy()
@@ -167,9 +166,6 @@ def main(args):
 
     if args.push_to_hub:
         login_to_hub()
-
-    if not isinstance(args.workers, int):
-        args.workers = min(16, mp.cpu_count())
 
     # AMP
     if args.amp:
@@ -202,7 +198,6 @@ def main(args):
         batch_size=args.batch_size,
         shuffle=False,
         drop_last=False,
-        num_workers=args.workers,
     )
     print(
         f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in "
@@ -310,7 +305,6 @@ def main(args):
         batch_size=args.batch_size,
         shuffle=True,
         drop_last=True,
-        num_workers=args.workers,
     )
     print(
         f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in "
@@ -466,7 +460,6 @@ def parse_args():
     )
     parser.add_argument("--input_size", type=int, default=1024, help="model input size, H = W")
     parser.add_argument("--lr", type=float, default=0.001, help="learning rate for the optimizer (Adam)")
-    parser.add_argument("-j", "--workers", type=int, default=None, help="number of workers used for dataloading")
     parser.add_argument("--resume", type=str, default=None, help="Path to your checkpoint")
     parser.add_argument("--pretrained-backbone", type=str, default=None, help="Path to your backbone weights")
     parser.add_argument("--test-only", dest="test_only", action="store_true", help="Run the validation loop")

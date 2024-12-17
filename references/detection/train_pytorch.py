@@ -531,11 +531,11 @@ def main(args):
         if val_loss < min_loss:
             print(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
             send_on_slack(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
-            torch.save(model.state_dict(), f"./{exp_name}.pt")
+            torch.save(model.state_dict(), Path(args.output_dir) / f"{exp_name}.pt")
             min_loss = val_loss
         if args.save_interval_epoch:
             print(f"Saving state at epoch: {epoch + 1}")
-            torch.save(model.state_dict(), f"./{exp_name}_epoch{epoch + 1}.pt")
+            torch.save(model.state_dict(), Path(args.output_dir) / f"{exp_name}_epoch{epoch + 1}.pt")
         log_msg = f"Epoch {epoch + 1}/{args.epochs} - Validation loss: {val_loss:.6} "
         if any(val is None for val in (recall, precision, mean_iou)):
             log_msg += "(Undefined metric value, caused by empty GTs or predictions)"
@@ -574,6 +574,7 @@ def parse_args():
     )
 
     parser.add_argument("arch", type=str, help="text-detection model to train")
+    parser.add_argument("--output_dir", type=str, default=".", help="path to save checkpoints and final model")
     parser.add_argument("--train_path", type=str, required=True, help="path to training data folder")
     parser.add_argument("--val_path", type=str, required=True, help="path to validation data folder")
     parser.add_argument("--name", type=str, default=None, help="Name of your training experiment")

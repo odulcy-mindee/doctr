@@ -6,7 +6,7 @@
 import math
 from copy import deepcopy
 from itertools import permutations
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import tensorflow as tf
@@ -16,18 +16,18 @@ from doctr.datasets import VOCABS
 from doctr.models.modules.transformer import MultiHeadAttention, PositionwiseFeedForward
 
 from ...classification import vit_s
-from ...utils.tensorflow import _bf16_to_float32, load_pretrained_params
+from ...utils.tensorflow import _bf16_to_float32, _build_model, load_pretrained_params
 from .base import _PARSeq, _PARSeqPostProcessor
 
 __all__ = ["PARSeq", "parseq"]
 
-default_cfgs: Dict[str, Dict[str, Any]] = {
+default_cfgs: dict[str, dict[str, Any]] = {
     "parseq": {
         "mean": (0.694, 0.695, 0.693),
         "std": (0.299, 0.296, 0.301),
         "input_shape": (32, 128, 3),
         "vocab": VOCABS["french"],
-        "url": "https://doctr-static.mindee.com/models?id=v0.6.0/parseq-24cf693e.zip&src=0",
+        "url": "https://doctr-static.mindee.com/models?id=v0.9.0/parseq-4152a87e.weights.h5&src=0",
     },
 }
 
@@ -36,14 +36,14 @@ class CharEmbedding(layers.Layer):
     """Implements the character embedding module
 
     Args:
-    ----
+    -
         vocab_size: size of the vocabulary
         d_model: dimension of the model
     """
 
     def __init__(self, vocab_size: int, d_model: int):
         super(CharEmbedding, self).__init__()
-        self.embedding = tf.keras.layers.Embedding(vocab_size, d_model)
+        self.embedding = layers.Embedding(vocab_size, d_model)
         self.d_model = d_model
 
     def call(self, x: tf.Tensor, **kwargs: Any) -> tf.Tensor:
@@ -54,7 +54,6 @@ class PARSeqDecoder(layers.Layer):
     """Implements decoder module of the PARSeq model
 
     Args:
-    ----
         d_model: dimension of the model
         num_heads: number of attention heads
         ffd: dimension of the feed forward layer
@@ -115,7 +114,6 @@ class PARSeq(_PARSeq, Model):
     Modified implementation based on the official Pytorch implementation: <https://github.com/baudm/parseq/tree/main`_.
 
     Args:
-    ----
         feature_extractor: the backbone serving as feature extractor
         vocab: vocabulary used for encoding
         embedding_units: number of embedding units
@@ -129,7 +127,7 @@ class PARSeq(_PARSeq, Model):
         cfg: dictionary containing information about the model
     """
 
-    _children_names: List[str] = ["feat_extractor", "postprocessor"]
+    _children_names: list[str] = ["feat_extractor", "postprocessor"]
 
     def __init__(
         self,
@@ -141,9 +139,9 @@ class PARSeq(_PARSeq, Model):
         dec_num_heads: int = 12,
         dec_ff_dim: int = 384,  # we use it from the original implementation instead of 2048
         dec_ffd_ratio: int = 4,
-        input_shape: Tuple[int, int, int] = (32, 128, 3),
+        input_shape: tuple[int, int, int] = (32, 128, 3),
         exportable: bool = False,
-        cfg: Optional[Dict[str, Any]] = None,
+        cfg: dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
         self.vocab = vocab
@@ -167,7 +165,6 @@ class PARSeq(_PARSeq, Model):
 
         self.postprocessor = PARSeqPostProcessor(vocab=self.vocab)
 
-    @tf.function
     def generate_permutations(self, seqlen: tf.Tensor) -> tf.Tensor:
         # Generates permutations of the target sequence.
         # Translated from https://github.com/baudm/parseq/blob/main/strhub/models/parseq/system.py
@@ -214,8 +211,7 @@ class PARSeq(_PARSeq, Model):
             )
         return combined
 
-    @tf.function
-    def generate_permutations_attention_masks(self, permutation: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
+    def generate_permutations_attention_masks(self, permutation: tf.Tensor) -> tuple[tf.Tensor, tf.Tensor]:
         # Generate source and target mask for the decoder attention.
         sz = permutation.shape[0]
         mask = tf.ones((sz, sz), dtype=tf.float32)
@@ -234,13 +230,12 @@ class PARSeq(_PARSeq, Model):
         target_mask = mask[1:, :-1]
         return tf.cast(source_mask, dtype=tf.bool), tf.cast(target_mask, dtype=tf.bool)
 
-    @tf.function
     def decode(
         self,
         target: tf.Tensor,
-        memory: tf,
-        target_mask: Optional[tf.Tensor] = None,
-        target_query: Optional[tf.Tensor] = None,
+        memory: tf.Tensor,
+        target_mask: tf.Tensor | None = None,
+        target_query: tf.Tensor | None = None,
         **kwargs: Any,
     ) -> tf.Tensor:
         batch_size, sequence_length = target.shape
@@ -253,8 +248,7 @@ class PARSeq(_PARSeq, Model):
         target_query = self.dropout(target_query, **kwargs)
         return self.decoder(target_query, content, memory, target_mask, **kwargs)
 
-    @tf.function
-    def decode_autoregressive(self, features: tf.Tensor, max_len: Optional[int] = None, **kwargs) -> tf.Tensor:
+    def decode_autoregressive(self, features: tf.Tensor, max_len: int | None = None, **kwargs) -> tf.Tensor:
         """Generate predictions for the given features."""
         max_length = max_len if max_len is not None else self.max_length
         max_length = min(max_length, self.max_length) + 1
@@ -321,11 +315,11 @@ class PARSeq(_PARSeq, Model):
     def call(
         self,
         x: tf.Tensor,
-        target: Optional[List[str]] = None,
+        target: list[str] | None = None,
         return_model_output: bool = False,
         return_preds: bool = False,
         **kwargs: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         features = self.feat_extractor(x, **kwargs)  # (batch_size, patches_seqlen, d_model)
         # remove cls token
         features = features[:, 1:, :]
@@ -396,7 +390,7 @@ class PARSeq(_PARSeq, Model):
 
         logits = _bf16_to_float32(logits)
 
-        out: Dict[str, tf.Tensor] = {}
+        out: dict[str, tf.Tensor] = {}
         if self.exportable:
             out["logits"] = logits
             return out
@@ -418,14 +412,13 @@ class PARSeqPostProcessor(_PARSeqPostProcessor):
     """Post processor for PARSeq architecture
 
     Args:
-    ----
         vocab: string containing the ordered sequence of supported characters
     """
 
     def __call__(
         self,
         logits: tf.Tensor,
-    ) -> List[Tuple[str, float]]:
+    ) -> list[tuple[str, float]]:
         # compute pred with argmax for attention models
         out_idxs = tf.math.argmax(logits, axis=2)
         preds_prob = tf.math.reduce_max(tf.nn.softmax(logits, axis=-1), axis=-1)
@@ -451,7 +444,7 @@ def _parseq(
     arch: str,
     pretrained: bool,
     backbone_fn,
-    input_shape: Optional[Tuple[int, int, int]] = None,
+    input_shape: tuple[int, int, int] | None = None,
     **kwargs: Any,
 ) -> PARSeq:
     # Patch the config
@@ -476,9 +469,14 @@ def _parseq(
 
     # Build the model
     model = PARSeq(feat_extractor, cfg=_cfg, **kwargs)
+    _build_model(model)
+
     # Load pretrained parameters
     if pretrained:
-        load_pretrained_params(model, default_cfgs[arch]["url"])
+        # The given vocab differs from the pretrained model => skip the mismatching layers for fine tuning
+        load_pretrained_params(
+            model, default_cfgs[arch]["url"], skip_mismatch=kwargs["vocab"] != default_cfgs[arch]["vocab"]
+        )
 
     return model
 
@@ -494,12 +492,10 @@ def parseq(pretrained: bool = False, **kwargs: Any) -> PARSeq:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained (bool): If True, returns a model pre-trained on our text recognition dataset
         **kwargs: keyword arguments of the PARSeq architecture
 
     Returns:
-    -------
         text recognition architecture
     """
     return _parseq(

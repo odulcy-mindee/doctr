@@ -9,7 +9,6 @@ import importlib.metadata
 import importlib.util
 import logging
 import os
-from typing import Optional
 
 CLASS_NAME: str = "words"
 
@@ -34,6 +33,20 @@ if USE_TORCH in ENV_VARS_TRUE_AND_AUTO_VALUES and USE_TF not in ENV_VARS_TRUE_VA
 else:  # pragma: no cover
     logging.info("Disabling PyTorch because USE_TF is set")
     _torch_available = False
+
+# Compatibility fix to make sure tensorflow.keras stays at Keras 2
+if "TF_USE_LEGACY_KERAS" not in os.environ:
+    os.environ["TF_USE_LEGACY_KERAS"] = "1"
+
+elif os.environ["TF_USE_LEGACY_KERAS"] != "1":
+    raise ValueError(
+        "docTR is only compatible with Keras 2, but you have explicitly set `TF_USE_LEGACY_KERAS` to `0`. "
+    )
+
+
+def ensure_keras_v2() -> None:  # pragma: no cover
+    if not os.environ.get("TF_USE_LEGACY_KERAS") == "1":
+        os.environ["TF_USE_LEGACY_KERAS"] = "1"
 
 
 if USE_TF in ENV_VARS_TRUE_AND_AUTO_VALUES and USE_TORCH not in ENV_VARS_TRUE_VALUES:
@@ -65,6 +78,8 @@ if USE_TF in ENV_VARS_TRUE_AND_AUTO_VALUES and USE_TORCH not in ENV_VARS_TRUE_VA
             _tf_available = False
         else:
             logging.info(f"TensorFlow version {_tf_version} available.")
+            ensure_keras_v2()
+
 else:  # pragma: no cover
     logging.info("Disabling Tensorflow because USE_TORCH is set")
     _tf_available = False
@@ -77,12 +92,11 @@ if not _torch_available and not _tf_available:  # pragma: no cover
     )
 
 
-def requires_package(name: str, extra_message: Optional[str] = None) -> None:  # pragma: no cover
+def requires_package(name: str, extra_message: str | None = None) -> None:  # pragma: no cover
     """
     package requirement helper
 
     Args:
-    ----
         name: name of the package
         extra_message: additional message to display if the package is not found
     """

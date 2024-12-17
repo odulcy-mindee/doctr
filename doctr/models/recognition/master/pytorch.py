@@ -3,8 +3,9 @@
 # This program is licensed under the Apache License 2.0.
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
+from collections.abc import Callable
 from copy import deepcopy
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 import torch
 from torch import nn
@@ -21,7 +22,7 @@ from .base import _MASTER, _MASTERPostProcessor
 __all__ = ["MASTER", "master"]
 
 
-default_cfgs: Dict[str, Dict[str, Any]] = {
+default_cfgs: dict[str, dict[str, Any]] = {
     "master": {
         "mean": (0.694, 0.695, 0.693),
         "std": (0.299, 0.296, 0.301),
@@ -37,7 +38,6 @@ class MASTER(_MASTER, nn.Module):
     Implementation based on the official Pytorch implementation: <https://github.com/wenwenyu/MASTER-pytorch>`_.
 
     Args:
-    ----
         feature_extractor: the backbone serving as feature extractor
         vocab: vocabulary, (without EOS, SOS, PAD)
         d_model: d parameter for the transformer decoder
@@ -61,9 +61,9 @@ class MASTER(_MASTER, nn.Module):
         num_layers: int = 3,
         max_length: int = 50,
         dropout: float = 0.2,
-        input_shape: Tuple[int, int, int] = (3, 32, 128),  # different from the paper
+        input_shape: tuple[int, int, int] = (3, 32, 128),  # different from the paper
         exportable: bool = False,
-        cfg: Optional[Dict[str, Any]] = None,
+        cfg: dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
 
@@ -102,12 +102,12 @@ class MASTER(_MASTER, nn.Module):
 
     def make_source_and_target_mask(
         self, source: torch.Tensor, target: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         # borrowed and slightly modified from  https://github.com/wenwenyu/MASTER-pytorch
         # NOTE: nn.TransformerDecoder takes the inverse from this implementation
         # [True, True, True, ..., False, False, False] -> False is masked
         # (N, 1, 1, max_length)
-        target_pad_mask = (target != self.vocab_size + 2).unsqueeze(1).unsqueeze(1)
+        target_pad_mask = (target != self.vocab_size + 2).unsqueeze(1).unsqueeze(1)  # type: ignore[attr-defined]
         target_length = target.size(1)
         # sub mask filled diagonal with True = see and False = masked (max_length, max_length)
         # NOTE: onnxruntime tril/triu works only with float currently (onnxruntime 1.11.1 - opset 14)
@@ -130,19 +130,17 @@ class MASTER(_MASTER, nn.Module):
         Sequences are masked after the EOS character.
 
         Args:
-        ----
             gt: the encoded tensor with gt labels
             model_output: predicted logits of the model
             seq_len: lengths of each gt word inside the batch
 
         Returns:
-        -------
             The loss of the model on the batch
         """
         # Input length : number of timesteps
         input_len = model_output.shape[1]
         # Add one for additional <eos> token (sos disappear in shift!)
-        seq_len = seq_len + 1
+        seq_len = seq_len + 1  # type: ignore[assignment]
         # Compute loss: don't forget to shift gt! Otherwise the model learns to output the gt[t-1]!
         # The "masked" first gt char is <sos>. Delete last logit of the model output.
         cce = F.cross_entropy(model_output[:, :-1, :].permute(0, 2, 1), gt[:, 1:], reduction="none")
@@ -156,21 +154,19 @@ class MASTER(_MASTER, nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        target: Optional[List[str]] = None,
+        target: list[str] | None = None,
         return_model_output: bool = False,
         return_preds: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Call function for training
 
         Args:
-        ----
             x: images
             target: list of str labels
             return_model_output: if True, return logits
             return_preds: if True, decode logits
 
         Returns:
-        -------
             A dictionnary containing eventually loss, logits and predictions.
         """
         # Encode
@@ -181,7 +177,7 @@ class MASTER(_MASTER, nn.Module):
         # add positional encoding to features
         encoded = self.positional_encoding(features)
 
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
 
         if self.training and target is None:
             raise ValueError("Need to provide labels during training")
@@ -213,7 +209,13 @@ class MASTER(_MASTER, nn.Module):
             out["out_map"] = logits
 
         if return_preds:
-            out["preds"] = self.postprocessor(logits)
+            # Disable for torch.compile compatibility
+            @torch.compiler.disable  # type: ignore[attr-defined]
+            def _postprocess(logits: torch.Tensor) -> list[tuple[str, float]]:
+                return self.postprocessor(logits)
+
+            # Post-process boxes
+            out["preds"] = _postprocess(logits)
 
         return out
 
@@ -221,12 +223,10 @@ class MASTER(_MASTER, nn.Module):
         """Decode function for prediction
 
         Args:
-        ----
             encoded: input tensor
 
         Returns:
-        -------
-            A Tuple of torch.Tensor: predictions, logits
+            A tuple of torch.Tensor: predictions, logits
         """
         b = encoded.size(0)
 
@@ -254,7 +254,7 @@ class MASTERPostProcessor(_MASTERPostProcessor):
     def __call__(
         self,
         logits: torch.Tensor,
-    ) -> List[Tuple[str, float]]:
+    ) -> list[tuple[str, float]]:
         # compute pred with argmax for attention models
         out_idxs = logits.argmax(-1)
         # N x L
@@ -277,7 +277,7 @@ def _master(
     backbone_fn: Callable[[bool], nn.Module],
     layer: str,
     pretrained_backbone: bool = True,
-    ignore_keys: Optional[List[str]] = None,
+    ignore_keys: list[str] | None = None,
     **kwargs: Any,
 ) -> MASTER:
     pretrained_backbone = pretrained_backbone and not pretrained
@@ -316,12 +316,10 @@ def master(pretrained: bool = False, **kwargs: Any) -> MASTER:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained (bool): If True, returns a model pre-trained on our text recognition dataset
         **kwargs: keywoard arguments passed to the MASTER architecture
 
     Returns:
-    -------
         text recognition architecture
     """
     return _master(

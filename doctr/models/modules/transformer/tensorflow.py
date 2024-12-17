@@ -4,7 +4,8 @@
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
 import math
-from typing import Any, Callable, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 import tensorflow as tf
 from tensorflow.keras import layers
@@ -12,8 +13,6 @@ from tensorflow.keras import layers
 from doctr.utils.repr import NestedObject
 
 __all__ = ["Decoder", "PositionalEncoding", "EncoderBlock", "PositionwiseFeedForward", "MultiHeadAttention"]
-
-tf.config.run_functions_eagerly(True)
 
 
 class PositionalEncoding(layers.Layer, NestedObject):
@@ -45,12 +44,10 @@ class PositionalEncoding(layers.Layer, NestedObject):
         """Forward pass
 
         Args:
-        ----
             x: embeddings (batch, max_len, d_model)
             **kwargs: additional arguments
 
-        Returns
-        -------
+        Returns:
             positional embeddings (batch, max_len, d_model)
         """
         if x.dtype == tf.float16:  # amp fix: cast to half
@@ -62,8 +59,8 @@ class PositionalEncoding(layers.Layer, NestedObject):
 
 @tf.function
 def scaled_dot_product_attention(
-    query: tf.Tensor, key: tf.Tensor, value: tf.Tensor, mask: Optional[tf.Tensor] = None
-) -> Tuple[tf.Tensor, tf.Tensor]:
+    query: tf.Tensor, key: tf.Tensor, value: tf.Tensor, mask: tf.Tensor | None = None
+) -> tuple[tf.Tensor, tf.Tensor]:
     """Scaled Dot-Product Attention"""
     scores = tf.matmul(query, tf.transpose(key, perm=[0, 1, 3, 2])) / math.sqrt(query.shape[-1])
     if mask is not None:
@@ -162,7 +159,7 @@ class EncoderBlock(layers.Layer, NestedObject):
             PositionwiseFeedForward(d_model, dff, dropout, activation_fct) for _ in range(self.num_layers)
         ]
 
-    def call(self, x: tf.Tensor, mask: Optional[tf.Tensor] = None, **kwargs: Any) -> tf.Tensor:
+    def call(self, x: tf.Tensor, mask: tf.Tensor | None = None, **kwargs: Any) -> tf.Tensor:
         output = x
 
         for i in range(self.num_layers):
@@ -212,8 +209,8 @@ class Decoder(layers.Layer, NestedObject):
         self,
         tgt: tf.Tensor,
         memory: tf.Tensor,
-        source_mask: Optional[tf.Tensor] = None,
-        target_mask: Optional[tf.Tensor] = None,
+        source_mask: tf.Tensor | None = None,
+        target_mask: tf.Tensor | None = None,
         **kwargs: Any,
     ) -> tf.Tensor:
         tgt = self.embed(tgt, **kwargs) * math.sqrt(self.d_model)

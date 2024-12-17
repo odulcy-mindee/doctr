@@ -5,6 +5,10 @@
 
 import os
 
+from doctr.file_utils import ensure_keras_v2
+
+ensure_keras_v2()
+
 os.environ["USE_TF"] = "1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
@@ -15,12 +19,12 @@ from pathlib import Path
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras import mixed_precision
+from tensorflow.keras import Model, mixed_precision, optimizers
 from tqdm.auto import tqdm
 
 from doctr.models import login_to_hub, push_to_hf_hub
 
-gpu_devices = tf.config.experimental.list_physical_devices("GPU")
+gpu_devices = tf.config.list_physical_devices("GPU")
 if any(gpu_devices):
     tf.config.experimental.set_memory_growth(gpu_devices[0], True)
 
@@ -28,7 +32,7 @@ from doctr import transforms as T
 from doctr.datasets import DataLoader, DetectionDataset
 from doctr.models import detection
 from doctr.utils.metrics import LocalizationConfusion
-from utils import EarlyStopper, load_backbone, plot_recorder, plot_samples
+from utils import EarlyStopper, plot_recorder, plot_samples
 
 SLACK_WEBHOOK_URL = None
 SLACK_WEBHOOK_PATH = Path(os.path.join(os.path.expanduser("~"), ".config", "doctr", "slack_webhook_url.txt"))
@@ -58,7 +62,7 @@ def send_on_slack(text: str):
 
 
 def record_lr(
-    model: tf.keras.Model,
+    model: Model,
     train_loader: DataLoader,
     batch_transforms,
     optimizer,
@@ -85,7 +89,7 @@ def record_lr(
 
         # Forward, Backward & update
         with tf.GradientTape() as tape:
-            train_loss = model(images, targets, training=True)["loss"]
+            train_loss = model(images, target=targets, training=True)["loss"]
         grads = tape.gradient(train_loss, model.trainable_weights)
 
         if amp:
@@ -109,6 +113,11 @@ def record_lr(
     return lr_recorder[: len(loss_recorder)], loss_recorder
 
 
+@tf.function
+def apply_grads(optimizer, grads, model):
+    optimizer.apply_gradients(zip(grads, model.trainable_weights))
+
+
 def fit_one_epoch(model, train_loader, batch_transforms, optimizer, amp=False):
     train_iter = iter(train_loader)
     # Iterate over the batches of the dataset
@@ -120,11 +129,11 @@ def fit_one_epoch(model, train_loader, batch_transforms, optimizer, amp=False):
         images = batch_transforms(images)
 
         with tf.GradientTape() as tape:
-            train_loss = model(images, targets, training=True)["loss"]
+            train_loss = model(images, target=targets, training=True)["loss"]
         grads = tape.gradient(train_loss, model.trainable_weights)
         if amp:
             grads = optimizer.get_unscaled_gradients(grads)
-        optimizer.apply_gradients(zip(grads, model.trainable_weights))
+        apply_grads(optimizer, grads, model)
 
         pbar.set_description(f"Training loss: {train_loss.numpy():.6}")
         current_progress = pbar.n / pbar.total * 100
@@ -142,7 +151,7 @@ def evaluate(model, val_loader, batch_transforms, val_metric):
     val_iter = iter(val_loader)
     for images, targets in tqdm(val_iter):
         images = batch_transforms(images)
-        out = model(images, targets, training=False, return_preds=True)
+        out = model(images, target=targets, training=False, return_preds=True)
         # Compute metric
         loc_preds = out["preds"]
         for target, loc_pred in zip(targets, loc_preds):
@@ -200,21 +209,17 @@ def main(args):
         drop_last=False,
     )
     print(
-        f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in "
-        f"{val_loader.num_batches} batches)"
+        f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in {val_loader.num_batches} batches)"
     )
     send_on_slack(
-        f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in "
-        f"{val_loader.num_batches} batches)"
+        f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in {val_loader.num_batches} batches)"
     )
     with open(os.path.join(args.val_path, "labels.json"), "rb") as f:
         val_hash = hashlib.sha256(f.read()).hexdigest()
 
-    batch_transforms = T.Compose(
-        [
-            T.Normalize(mean=(0.798, 0.785, 0.772), std=(0.264, 0.2749, 0.287)),
-        ]
-    )
+    batch_transforms = T.Compose([
+        T.Normalize(mean=(0.798, 0.785, 0.772), std=(0.264, 0.2749, 0.287)),
+    ])
 
     # Load doctr model
     model = detection.__dict__[args.arch](
@@ -227,11 +232,6 @@ def main(args):
     # Resume weights
     if isinstance(args.resume, str):
         model.load_weights(args.resume)
-
-    if isinstance(args.pretrained_backbone, str):
-        print("Loading backbone weights.")
-        model = load_backbone(model, args.pretrained_backbone)
-        print("Done.")
 
     # Metrics
     val_metric = LocalizationConfusion(use_polygons=args.rotation and not args.eval_straight)
@@ -307,12 +307,10 @@ def main(args):
         drop_last=True,
     )
     print(
-        f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in "
-        f"{train_loader.num_batches} batches)"
+        f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in {train_loader.num_batches} batches)"
     )
     send_on_slack(
-        f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in "
-        f"{train_loader.num_batches} batches)"
+        f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in {train_loader.num_batches} batches)"
     )
     with open(os.path.join(args.train_path, "labels.json"), "rb") as f:
         train_hash = hashlib.sha256(f.read()).hexdigest()
@@ -324,7 +322,7 @@ def main(args):
 
     # Scheduler
     if args.sched == "exponential":
-        scheduler = tf.keras.optimizers.schedules.ExponentialDecay(
+        scheduler = optimizers.schedules.ExponentialDecay(
             args.lr,
             decay_steps=args.epochs * len(train_loader),
             decay_rate=1 / (25e4),  # final lr as a fraction of initial lr
@@ -332,7 +330,7 @@ def main(args):
             name="ExponentialDecay",
         )
     elif args.sched == "poly":
-        scheduler = tf.keras.optimizers.schedules.PolynomialDecay(
+        scheduler = optimizers.schedules.PolynomialDecay(
             args.lr,
             decay_steps=args.epochs * len(train_loader),
             end_learning_rate=1e-7,
@@ -341,7 +339,7 @@ def main(args):
             name="PolynomialDecay",
         )
     # Optimizer
-    optimizer = tf.keras.optimizers.Adam(learning_rate=scheduler, beta_1=0.95, beta_2=0.99, epsilon=1e-6, clipnorm=5)
+    optimizer = optimizers.Adam(learning_rate=scheduler, beta_1=0.95, beta_2=0.99, epsilon=1e-6, clipnorm=5)
     if args.amp:
         optimizer = mixed_precision.LossScaleOptimizer(optimizer)
     # LR Finder
@@ -403,7 +401,7 @@ def main(args):
         if args.save_interval_epoch:
             print(f"Saving state at epoch: {epoch + 1}")
             send_on_slack(f"Saving state at epoch: {epoch + 1}")
-            model.save_weights(f"./{exp_name}_{epoch + 1}/weights")
+            model.save_weights(f"./{exp_name}_{epoch + 1}/weights.h5")
         log_msg = f"Epoch {epoch + 1}/{args.epochs} - Validation loss: {val_loss:.6} "
         if any(val is None for val in (recall, precision, mean_iou)):
             log_msg += "(Undefined metric value, caused by empty GTs or predictions)"
@@ -413,14 +411,12 @@ def main(args):
         send_on_slack(log_msg)
         # W&B
         if args.wb:
-            wandb.log(
-                {
-                    "val_loss": val_loss,
-                    "recall": recall,
-                    "precision": precision,
-                    "mean_iou": mean_iou,
-                }
-            )
+            wandb.log({
+                "val_loss": val_loss,
+                "recall": recall,
+                "precision": precision,
+                "mean_iou": mean_iou,
+            })
 
         # ClearML
         if args.clearml:
@@ -451,7 +447,7 @@ def parse_args():
 
     parser.add_argument("arch", type=str, help="text-detection model to train")
     parser.add_argument("--train_path", type=str, required=True, help="path to training data folder")
-    parser.add_argument("--val_path", type=str, help="path to validation data folder")
+    parser.add_argument("--val_path", type=str, required=True, help="path to validation data folder")
     parser.add_argument("--name", type=str, default=None, help="Name of your training experiment")
     parser.add_argument("--epochs", type=int, default=10, help="number of epochs to train the model on")
     parser.add_argument("-b", "--batch_size", type=int, default=2, help="batch size for training")
@@ -461,7 +457,6 @@ def parse_args():
     parser.add_argument("--input_size", type=int, default=1024, help="model input size, H = W")
     parser.add_argument("--lr", type=float, default=0.001, help="learning rate for the optimizer (Adam)")
     parser.add_argument("--resume", type=str, default=None, help="Path to your checkpoint")
-    parser.add_argument("--pretrained-backbone", type=str, default=None, help="Path to your backbone weights")
     parser.add_argument("--test-only", dest="test_only", action="store_true", help="Run the validation loop")
     parser.add_argument(
         "--freeze-backbone", dest="freeze_backbone", action="store_true", help="freeze model backbone for fine-tuning"

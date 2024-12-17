@@ -4,7 +4,7 @@
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import tensorflow as tf
 from tensorflow.keras import Model, Sequential, layers
@@ -13,18 +13,18 @@ from doctr.datasets import VOCABS
 from doctr.utils.repr import NestedObject
 
 from ...classification import resnet31
-from ...utils.tensorflow import _bf16_to_float32, load_pretrained_params
+from ...utils.tensorflow import _bf16_to_float32, _build_model, load_pretrained_params
 from ..core import RecognitionModel, RecognitionPostProcessor
 
 __all__ = ["SAR", "sar_resnet31"]
 
-default_cfgs: Dict[str, Dict[str, Any]] = {
+default_cfgs: dict[str, dict[str, Any]] = {
     "sar_resnet31": {
         "mean": (0.694, 0.695, 0.693),
         "std": (0.299, 0.296, 0.301),
         "input_shape": (32, 128, 3),
         "vocab": VOCABS["french"],
-        "url": "https://doctr-static.mindee.com/models?id=v0.6.0/sar_resnet31-c41e32a5.zip&src=0",
+        "url": "https://doctr-static.mindee.com/models?id=v0.9.0/sar_resnet31-5a58806c.weights.h5&src=0",
     },
 }
 
@@ -33,7 +33,6 @@ class SAREncoder(layers.Layer, NestedObject):
     """Implements encoder module of the SAR model
 
     Args:
-    ----
         rnn_units: number of hidden rnn units
         dropout_prob: dropout probability
     """
@@ -58,7 +57,6 @@ class AttentionModule(layers.Layer, NestedObject):
     """Implements attention module of the SAR model
 
     Args:
-    ----
         attention_units: number of hidden attention units
 
     """
@@ -120,7 +118,6 @@ class SARDecoder(layers.Layer, NestedObject):
     """Implements decoder module of the SAR model
 
     Args:
-    ----
         rnn_units: number of hidden units in recurrent cells
         max_length: maximum length of a sequence
         vocab_size: number of classes in the model alphabet
@@ -159,13 +156,13 @@ class SARDecoder(layers.Layer, NestedObject):
         self,
         features: tf.Tensor,
         holistic: tf.Tensor,
-        gt: Optional[tf.Tensor] = None,
+        gt: tf.Tensor | None = None,
         **kwargs: Any,
     ) -> tf.Tensor:
         if gt is not None:
             gt_embedding = self.embed_tgt(gt, **kwargs)
 
-        logits_list: List[tf.Tensor] = []
+        logits_list: list[tf.Tensor] = []
 
         for t in range(self.max_length + 1):  # 32
             if t == 0:
@@ -210,7 +207,6 @@ class SAR(Model, RecognitionModel):
     Irregular Text Recognition" <https://arxiv.org/pdf/1811.00751.pdf>`_.
 
     Args:
-    ----
         feature_extractor: the backbone serving as feature extractor
         vocab: vocabulary used for encoding
         rnn_units: number of hidden units in both encoder and decoder LSTM
@@ -223,7 +219,7 @@ class SAR(Model, RecognitionModel):
         cfg: dictionary containing information about the model
     """
 
-    _children_names: List[str] = ["feat_extractor", "encoder", "decoder", "postprocessor"]
+    _children_names: list[str] = ["feat_extractor", "encoder", "decoder", "postprocessor"]
 
     def __init__(
         self,
@@ -236,7 +232,7 @@ class SAR(Model, RecognitionModel):
         num_decoder_cells: int = 2,
         dropout_prob: float = 0.0,
         exportable: bool = False,
-        cfg: Optional[Dict[str, Any]] = None,
+        cfg: dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
         self.vocab = vocab
@@ -269,13 +265,11 @@ class SAR(Model, RecognitionModel):
         Sequences are masked after the EOS character.
 
         Args:
-        ----
             gt: the encoded tensor with gt labels
             model_output: predicted logits of the model
             seq_len: lengths of each gt word inside the batch
 
         Returns:
-        -------
             The loss of the model on the batch
         """
         # Input length : number of timesteps
@@ -296,11 +290,11 @@ class SAR(Model, RecognitionModel):
     def call(
         self,
         x: tf.Tensor,
-        target: Optional[List[str]] = None,
+        target: list[str] | None = None,
         return_model_output: bool = False,
         return_preds: bool = False,
         **kwargs: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         features = self.feat_extractor(x, **kwargs)
         # vertical max pooling --> (N, C, W)
         pooled_features = tf.reduce_max(features, axis=1)
@@ -318,7 +312,7 @@ class SAR(Model, RecognitionModel):
             self.decoder(features, encoded, gt=None if target is None else gt, **kwargs)
         )
 
-        out: Dict[str, tf.Tensor] = {}
+        out: dict[str, tf.Tensor] = {}
         if self.exportable:
             out["logits"] = decoded_features
             return out
@@ -340,14 +334,13 @@ class SARPostProcessor(RecognitionPostProcessor):
     """Post processor for SAR architectures
 
     Args:
-    ----
         vocab: string containing the ordered sequence of supported characters
     """
 
     def __call__(
         self,
         logits: tf.Tensor,
-    ) -> List[Tuple[str, float]]:
+    ) -> list[tuple[str, float]]:
         # compute pred with argmax for attention models
         out_idxs = tf.math.argmax(logits, axis=2)
         # N x L
@@ -371,7 +364,7 @@ def _sar(
     pretrained: bool,
     backbone_fn,
     pretrained_backbone: bool = True,
-    input_shape: Optional[Tuple[int, int, int]] = None,
+    input_shape: tuple[int, int, int] | None = None,
     **kwargs: Any,
 ) -> SAR:
     pretrained_backbone = pretrained_backbone and not pretrained
@@ -392,9 +385,13 @@ def _sar(
 
     # Build the model
     model = SAR(feat_extractor, cfg=_cfg, **kwargs)
+    _build_model(model)
     # Load pretrained parameters
     if pretrained:
-        load_pretrained_params(model, default_cfgs[arch]["url"])
+        # The given vocab differs from the pretrained model => skip the mismatching layers for fine tuning
+        load_pretrained_params(
+            model, default_cfgs[arch]["url"], skip_mismatch=kwargs["vocab"] != default_cfgs[arch]["vocab"]
+        )
 
     return model
 
@@ -410,12 +407,10 @@ def sar_resnet31(pretrained: bool = False, **kwargs: Any) -> SAR:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained (bool): If True, returns a model pre-trained on our text recognition dataset
         **kwargs: keyword arguments of the SAR architecture
 
     Returns:
-    -------
         text recognition architecture
     """
     return _sar("sar_resnet31", pretrained, resnet31, **kwargs)

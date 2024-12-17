@@ -6,16 +6,21 @@
 # Credits: post-processing adapted from https://github.com/xuannianz/DifferentiableBinarization
 
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
+from tensorflow.keras import Model, Sequential, layers, losses
 from tensorflow.keras.applications import ResNet50
 
 from doctr.file_utils import CLASS_NAME
-from doctr.models.utils import IntermediateLayerGetter, _bf16_to_float32, conv_sequence, load_pretrained_params
+from doctr.models.utils import (
+    IntermediateLayerGetter,
+    _bf16_to_float32,
+    _build_model,
+    conv_sequence,
+    load_pretrained_params,
+)
 from doctr.utils.repr import NestedObject
 
 from ...classification import mobilenet_v3_large
@@ -24,18 +29,18 @@ from .base import DBPostProcessor, _DBNet
 __all__ = ["DBNet", "db_resnet50", "db_mobilenet_v3_large"]
 
 
-default_cfgs: Dict[str, Dict[str, Any]] = {
+default_cfgs: dict[str, dict[str, Any]] = {
     "db_resnet50": {
         "mean": (0.798, 0.785, 0.772),
         "std": (0.264, 0.2749, 0.287),
         "input_shape": (1024, 1024, 3),
-        "url": "https://doctr-static.mindee.com/models?id=v0.7.0/db_resnet50-84171458.zip&src=0",
+        "url": "https://doctr-static.mindee.com/models?id=v0.9.0/db_resnet50-649fa22b.weights.h5&src=0",
     },
     "db_mobilenet_v3_large": {
         "mean": (0.798, 0.785, 0.772),
         "std": (0.264, 0.2749, 0.287),
         "input_shape": (1024, 1024, 3),
-        "url": "https://doctr-static.mindee.com/models?id=v0.7.0/db_mobilenet_v3_large-da524564.zip&src=0",
+        "url": "https://doctr-static.mindee.com/models?id=v0.9.0/db_mobilenet_v3_large-ee2e1dbe.weights.h5&src=0",
     },
 }
 
@@ -45,7 +50,6 @@ class FeaturePyramidNetwork(layers.Layer, NestedObject):
     <https://arxiv.org/pdf/1612.03144.pdf>`_.
 
     Args:
-    ----
         channels: number of channel to output
     """
 
@@ -67,12 +71,10 @@ class FeaturePyramidNetwork(layers.Layer, NestedObject):
         """Module which performs a 3x3 convolution followed by up-sampling
 
         Args:
-        ----
             channels: number of output channels
             dilation_factor (int): dilation factor to scale the convolution output before concatenation
 
         Returns:
-        -------
             a keras.layers.Layer object, wrapping these operations in a sequential module
 
         """
@@ -81,7 +83,7 @@ class FeaturePyramidNetwork(layers.Layer, NestedObject):
         if dilation_factor > 1:
             _layers.append(layers.UpSampling2D(size=(dilation_factor, dilation_factor), interpolation="nearest"))
 
-        module = keras.Sequential(_layers)
+        module = Sequential(_layers)
 
         return module
 
@@ -90,7 +92,7 @@ class FeaturePyramidNetwork(layers.Layer, NestedObject):
 
     def call(
         self,
-        x: List[tf.Tensor],
+        x: list[tf.Tensor],
         **kwargs: Any,
     ) -> tf.Tensor:
         # Channel mapping
@@ -104,12 +106,11 @@ class FeaturePyramidNetwork(layers.Layer, NestedObject):
         return layers.concatenate(results)
 
 
-class DBNet(_DBNet, keras.Model, NestedObject):
+class DBNet(_DBNet, Model, NestedObject):
     """DBNet as described in `"Real-time Scene Text Detection with Differentiable Binarization"
     <https://arxiv.org/pdf/1911.08947.pdf>`_.
 
     Args:
-    ----
         feature extractor: the backbone serving as feature extractor
         fpn_channels: number of channels each extracted feature maps is mapped to
         bin_thresh: threshold for binarization
@@ -120,7 +121,7 @@ class DBNet(_DBNet, keras.Model, NestedObject):
         class_names: list of class names
     """
 
-    _children_names: List[str] = ["feat_extractor", "fpn", "probability_head", "threshold_head", "postprocessor"]
+    _children_names: list[str] = ["feat_extractor", "fpn", "probability_head", "threshold_head", "postprocessor"]
 
     def __init__(
         self,
@@ -130,8 +131,8 @@ class DBNet(_DBNet, keras.Model, NestedObject):
         box_thresh: float = 0.1,
         assume_straight_pages: bool = True,
         exportable: bool = False,
-        cfg: Optional[Dict[str, Any]] = None,
-        class_names: List[str] = [CLASS_NAME],
+        cfg: dict[str, Any] | None = None,
+        class_names: list[str] = [CLASS_NAME],
     ) -> None:
         super().__init__()
         self.class_names = class_names
@@ -147,14 +148,14 @@ class DBNet(_DBNet, keras.Model, NestedObject):
         _inputs = [layers.Input(shape=in_shape[1:]) for in_shape in self.feat_extractor.output_shape]
         output_shape = tuple(self.fpn(_inputs).shape)
 
-        self.probability_head = keras.Sequential([
+        self.probability_head = Sequential([
             *conv_sequence(64, "relu", True, kernel_size=3, input_shape=output_shape[1:]),
             layers.Conv2DTranspose(64, 2, strides=2, use_bias=False, kernel_initializer="he_normal"),
             layers.BatchNormalization(),
             layers.Activation("relu"),
             layers.Conv2DTranspose(num_classes, 2, strides=2, kernel_initializer="he_normal"),
         ])
-        self.threshold_head = keras.Sequential([
+        self.threshold_head = Sequential([
             *conv_sequence(64, "relu", True, kernel_size=3, input_shape=output_shape[1:]),
             layers.Conv2DTranspose(64, 2, strides=2, use_bias=False, kernel_initializer="he_normal"),
             layers.BatchNormalization(),
@@ -170,7 +171,7 @@ class DBNet(_DBNet, keras.Model, NestedObject):
         self,
         out_map: tf.Tensor,
         thresh_map: tf.Tensor,
-        target: List[Dict[str, np.ndarray]],
+        target: list[dict[str, np.ndarray]],
         gamma: float = 2.0,
         alpha: float = 0.5,
         eps: float = 1e-8,
@@ -179,7 +180,6 @@ class DBNet(_DBNet, keras.Model, NestedObject):
         and a list of masks for each image. From there it computes the loss with the model output
 
         Args:
-        ----
             out_map: output feature map of the model of shape (N, H, W, C)
             thresh_map: threshold map of shape (N, H, W, C)
             target: list of dictionary where each dict has a `boxes` and a `flags` entry
@@ -188,7 +188,6 @@ class DBNet(_DBNet, keras.Model, NestedObject):
             eps: epsilon factor in dice loss
 
         Returns:
-        -------
             A loss tensor
         """
         if gamma < 0:
@@ -206,7 +205,7 @@ class DBNet(_DBNet, keras.Model, NestedObject):
 
         # Focal loss
         focal_scale = 10.0
-        bce_loss = tf.keras.losses.binary_crossentropy(seg_target[..., None], out_map[..., None], from_logits=True)
+        bce_loss = losses.binary_crossentropy(seg_target[..., None], out_map[..., None], from_logits=True)
 
         # Convert logits to prob, compute gamma factor
         p_t = (seg_target * prob_map) + ((1 - seg_target) * (1 - prob_map))
@@ -241,16 +240,16 @@ class DBNet(_DBNet, keras.Model, NestedObject):
     def call(
         self,
         x: tf.Tensor,
-        target: Optional[List[Dict[str, np.ndarray]]] = None,
+        target: list[dict[str, np.ndarray]] | None = None,
         return_model_output: bool = False,
         return_preds: bool = False,
         **kwargs: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         feat_maps = self.feat_extractor(x, **kwargs)
         feat_concat = self.fpn(feat_maps, **kwargs)
         logits = self.probability_head(feat_concat, **kwargs)
 
-        out: Dict[str, tf.Tensor] = {}
+        out: dict[str, tf.Tensor] = {}
         if self.exportable:
             out["logits"] = logits
             return out
@@ -277,9 +276,9 @@ def _db_resnet(
     arch: str,
     pretrained: bool,
     backbone_fn,
-    fpn_layers: List[str],
+    fpn_layers: list[str],
     pretrained_backbone: bool = True,
-    input_shape: Optional[Tuple[int, int, int]] = None,
+    input_shape: tuple[int, int, int] | None = None,
     **kwargs: Any,
 ) -> DBNet:
     pretrained_backbone = pretrained_backbone and not pretrained
@@ -305,9 +304,16 @@ def _db_resnet(
 
     # Build the model
     model = DBNet(feat_extractor, cfg=_cfg, **kwargs)
+    _build_model(model)
+
     # Load pretrained parameters
     if pretrained:
-        load_pretrained_params(model, _cfg["url"])
+        # The given class_names differs from the pretrained model => skip the mismatching layers for fine tuning
+        load_pretrained_params(
+            model,
+            _cfg["url"],
+            skip_mismatch=kwargs["class_names"] != default_cfgs[arch].get("class_names", [CLASS_NAME]),
+        )
 
     return model
 
@@ -316,9 +322,9 @@ def _db_mobilenet(
     arch: str,
     pretrained: bool,
     backbone_fn,
-    fpn_layers: List[str],
+    fpn_layers: list[str],
     pretrained_backbone: bool = True,
-    input_shape: Optional[Tuple[int, int, int]] = None,
+    input_shape: tuple[int, int, int] | None = None,
     **kwargs: Any,
 ) -> DBNet:
     pretrained_backbone = pretrained_backbone and not pretrained
@@ -326,6 +332,10 @@ def _db_mobilenet(
     # Patch the config
     _cfg = deepcopy(default_cfgs[arch])
     _cfg["input_shape"] = input_shape or _cfg["input_shape"]
+    if not kwargs.get("class_names", None):
+        kwargs["class_names"] = default_cfgs[arch].get("class_names", [CLASS_NAME])
+    else:
+        kwargs["class_names"] = sorted(kwargs["class_names"])
 
     # Feature extractor
     feat_extractor = IntermediateLayerGetter(
@@ -339,9 +349,15 @@ def _db_mobilenet(
 
     # Build the model
     model = DBNet(feat_extractor, cfg=_cfg, **kwargs)
+    _build_model(model)
     # Load pretrained parameters
     if pretrained:
-        load_pretrained_params(model, _cfg["url"])
+        # The given class_names differs from the pretrained model => skip the mismatching layers for fine tuning
+        load_pretrained_params(
+            model,
+            _cfg["url"],
+            skip_mismatch=kwargs["class_names"] != default_cfgs[arch].get("class_names", [CLASS_NAME]),
+        )
 
     return model
 
@@ -357,12 +373,10 @@ def db_resnet50(pretrained: bool = False, **kwargs: Any) -> DBNet:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained (bool): If True, returns a model pre-trained on our text detection dataset
         **kwargs: keyword arguments of the DBNet architecture
 
     Returns:
-    -------
         text detection architecture
     """
     return _db_resnet(
@@ -385,12 +399,10 @@ def db_mobilenet_v3_large(pretrained: bool = False, **kwargs: Any) -> DBNet:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained (bool): If True, returns a model pre-trained on our text detection dataset
         **kwargs: keyword arguments of the DBNet architecture
 
     Returns:
-    -------
         text detection architecture
     """
     return _db_mobilenet(

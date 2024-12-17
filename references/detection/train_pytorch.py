@@ -5,9 +5,6 @@
 
 import os
 from pathlib import Path
-from doctr.file_utils import CLASS_NAME
-from doctr import datasets
-
 
 os.environ["USE_TORCH"] = "1"
 
@@ -16,7 +13,6 @@ import hashlib
 import logging
 import multiprocessing as mp
 import time
-from pathlib import Path
 
 import numpy as np
 import torch
@@ -256,16 +252,16 @@ def main(args):
         pin_memory=torch.cuda.is_available(),
         collate_fn=val_set.collate_fn,
     )
-    print(f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in " f"{len(val_loader)} batches)")
+    print(f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in {len(val_loader)} batches)")
     send_on_slack(
-        f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in " f"{len(val_loader)} batches)"
+        f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in {len(val_loader)} batches)"
     )
     with open(os.path.join(args.val_path, "labels.json"), "rb") as f:
         val_hash = hashlib.sha256(f.read()).hexdigest()
 
     batch_transforms = Normalize(mean=(0.798, 0.785, 0.772), std=(0.264, 0.2749, 0.287))
 
-    #funsd_ds = DetectionDataset(
+    # funsd_ds = DetectionDataset(
     #    img_folder=os.path.join(args.funsd_path, "images"),
     #    label_path=os.path.join(args.funsd_path, "labels.json"),
     #    sample_transforms=T.SampleCompose(
@@ -285,9 +281,9 @@ def main(args):
     #        )
     #    ),
     #    use_polygons=args.rotation and not args.eval_straight,
-    #)
+    # )
 
-    #funsd_test_loader = DataLoader(
+    # funsd_test_loader = DataLoader(
     #    funsd_ds,
     #    batch_size=args.batch_size,
     #    drop_last=False,
@@ -295,11 +291,10 @@ def main(args):
     #    sampler=SequentialSampler(funsd_ds),
     #    pin_memory=torch.cuda.is_available(),
     #    collate_fn=funsd_ds.collate_fn,
-    #)
-    #print(f"FUNSD Test set loaded in {time.time() - st:.4}s ({len(funsd_ds)} samples in " f"{len(funsd_test_loader)} batches)")
+    # )
+    # print(f"FUNSD Test set loaded in {time.time() - st:.4}s ({len(funsd_ds)} samples in " f"{len(funsd_test_loader)} batches)")
 
-
-    #cord_ds = DetectionDataset(
+    # cord_ds = DetectionDataset(
     #    img_folder=os.path.join(args.cord_path, "images"),
     #    label_path=os.path.join(args.cord_path, "labels.json"),
     #    sample_transforms=T.SampleCompose(
@@ -319,9 +314,9 @@ def main(args):
     #        )
     #    ),
     #    use_polygons=args.rotation and not args.eval_straight,
-    #)
+    # )
 
-    #cord_test_loader = DataLoader(
+    # cord_test_loader = DataLoader(
     #    cord_ds,
     #    batch_size=args.batch_size,
     #    drop_last=False,
@@ -329,8 +324,8 @@ def main(args):
     #    sampler=SequentialSampler(cord_ds),
     #    pin_memory=torch.cuda.is_available(),
     #    collate_fn=cord_ds.collate_fn,
-    #)
-    #print(f"CORD Test set loaded in {time.time() - st:.4}s ({len(cord_ds)} samples in " f"{len(funsd_test_loader)} batches)")
+    # )
+    # print(f"CORD Test set loaded in {time.time() - st:.4}s ({len(cord_ds)} samples in " f"{len(funsd_test_loader)} batches)")
 
     # Load doctr model
     model = detection.__dict__[args.arch](
@@ -356,22 +351,22 @@ def main(args):
     elif torch.cuda.is_available():
         args.device = 0
     else:
-        logging.warning("No accessible GPU, targe device set to CPU.")
+        logging.warning("No accessible GPU, target device set to CPU.")
     if torch.cuda.is_available():
         torch.cuda.set_device(args.device)
         model = model.cuda()
 
     # Metrics
-    #funsd_val_metric = LocalizationConfusion(
+    # funsd_val_metric = LocalizationConfusion(
     #    use_polygons=args.rotation and not args.eval_straight,
     #    mask_shape=(args.input_size, args.input_size),
     #    use_broadcasting=True if system_available_memory > 62 else False,
-    #)
-    #cord_val_metric = LocalizationConfusion(
+    # )
+    # cord_val_metric = LocalizationConfusion(
     #    use_polygons=args.rotation and not args.eval_straight,
     #    mask_shape=(args.input_size, args.input_size),
     #    use_broadcasting=True if system_available_memory > 62 else False,
-    #)
+    # )
     val_metric = LocalizationConfusion(use_polygons=args.rotation and not args.eval_straight)
 
     if args.test_only:
@@ -444,9 +439,9 @@ def main(args):
         pin_memory=torch.cuda.is_available(),
         collate_fn=train_set.collate_fn,
     )
-    print(f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in " f"{len(train_loader)} batches)")
+    print(f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in {len(train_loader)} batches)")
     send_on_slack(
-        f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in " f"{len(train_loader)} batches)"
+        f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in {len(train_loader)} batches)"
     )
     with open(os.path.join(args.train_path, "labels.json"), "rb") as f:
         train_hash = hashlib.sha256(f.read()).hexdigest()
@@ -521,17 +516,17 @@ def main(args):
         val_loss, recall, precision, mean_iou = evaluate(model, val_loader, batch_transforms, val_metric, amp=args.amp)
         funsd_recall, funsd_precision, funsd_mean_iou = 0.0, 0.0, 0.0
         cord_recall, cord_precision, cord_mean_iou = 0.0, 0.0, 0.0
-        #try:
+        # try:
         #    _, funsd_recall, funsd_precision, funsd_mean_iou = evaluate(
         #        model, funsd_test_loader, batch_transforms, funsd_val_metric, amp=args.amp
         #    )
-        #except Exception:
+        # except Exception:
         #    pass
-        #try:
+        # try:
         #    _, cord_recall, cord_precision, cord_mean_iou = evaluate(
         #        model, cord_test_loader, batch_transforms, cord_val_metric, amp=args.amp
         #    )
-        #except Exception:
+        # except Exception:
         #    pass
         if val_loss < min_loss:
             print(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
@@ -547,19 +542,19 @@ def main(args):
         else:
             log_msg += f"(Recall: {recall:.2%} | Precision: {precision:.2%} | Mean IoU: {mean_iou:.2%})\n"
             log_msg += f"FUNSD: Recall: {funsd_recall:.2%} | Precision: {funsd_precision:.2%} | Mean IoU: {funsd_mean_iou:.2%}\n"
-            log_msg += f"CORD: Recall: {cord_recall:.2%} | Precision: {cord_precision:.2%} | Mean IoU: {cord_mean_iou:.2%}"
+            log_msg += (
+                f"CORD: Recall: {cord_recall:.2%} | Precision: {cord_precision:.2%} | Mean IoU: {cord_mean_iou:.2%}"
+            )
         print(log_msg)
         send_on_slack(log_msg)
         # W&B
         if args.wb:
-            wandb.log(
-                {
-                    "val_loss": val_loss,
-                    "recall": recall,
-                    "precision": precision,
-                    "mean_iou": mean_iou,
-                }
-            )
+            wandb.log({
+                "val_loss": val_loss,
+                "recall": recall,
+                "precision": precision,
+                "mean_iou": mean_iou,
+            })
         if args.early_stop and early_stopper.early_stop(val_loss):
             print("Training halted early due to reaching patience limit.")
             break
@@ -578,9 +573,9 @@ def parse_args():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-    parser.add_argument("train_path", type=str, help="path to training data folder")
-    parser.add_argument("val_path", type=str, help="path to validation data folder")
     parser.add_argument("arch", type=str, help="text-detection model to train")
+    parser.add_argument("--train_path", type=str, required=True, help="path to training data folder")
+    parser.add_argument("--val_path", type=str, required=True, help="path to validation data folder")
     parser.add_argument("--name", type=str, default=None, help="Name of your training experiment")
     parser.add_argument("--epochs", type=int, default=10, help="number of epochs to train the model on")
     parser.add_argument("-b", "--batch_size", type=int, default=2, help="batch size for training")

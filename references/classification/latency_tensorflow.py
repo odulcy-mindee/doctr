@@ -9,18 +9,22 @@ import argparse
 import os
 import time
 
-import numpy as np
-import tensorflow as tf
+from doctr.file_utils import ensure_keras_v2
+
+ensure_keras_v2()
 
 os.environ["USE_TF"] = "1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
+import numpy as np
+import tensorflow as tf
 
 from doctr.models import classification
 
 
 def main(args):
     if args.gpu:
-        gpu_devices = tf.config.experimental.list_physical_devices("GPU")
+        gpu_devices = tf.config.list_physical_devices("GPU")
         if any(gpu_devices):
             tf.config.experimental.set_memory_growth(gpu_devices[0], True)
         else:

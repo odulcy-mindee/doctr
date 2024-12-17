@@ -6,15 +6,14 @@
 # Credits: post-processing adapted from https://github.com/xuannianz/DifferentiableBinarization
 
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import numpy as np
 import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import Sequential, layers
+from tensorflow.keras import Model, Sequential, layers
 
 from doctr.file_utils import CLASS_NAME
-from doctr.models.utils import IntermediateLayerGetter, _bf16_to_float32, load_pretrained_params
+from doctr.models.utils import IntermediateLayerGetter, _bf16_to_float32, _build_model, load_pretrained_params
 from doctr.utils.repr import NestedObject
 
 from ...classification import textnet_base, textnet_small, textnet_tiny
@@ -24,24 +23,24 @@ from .base import _FAST, FASTPostProcessor
 __all__ = ["FAST", "fast_tiny", "fast_small", "fast_base", "reparameterize"]
 
 
-default_cfgs: Dict[str, Dict[str, Any]] = {
+default_cfgs: dict[str, dict[str, Any]] = {
     "fast_tiny": {
         "input_shape": (1024, 1024, 3),
         "mean": (0.798, 0.785, 0.772),
         "std": (0.264, 0.2749, 0.287),
-        "url": "https://doctr-static.mindee.com/models?id=v0.8.1/fast_tiny-959daecb.zip&src=0",
+        "url": "https://doctr-static.mindee.com/models?id=v0.9.0/fast_tiny-d7379d7b.weights.h5&src=0",
     },
     "fast_small": {
         "input_shape": (1024, 1024, 3),
         "mean": (0.798, 0.785, 0.772),
         "std": (0.264, 0.2749, 0.287),
-        "url": "https://doctr-static.mindee.com/models?id=v0.8.1/fast_small-f1617503.zip&src=0",
+        "url": "https://doctr-static.mindee.com/models?id=v0.9.0/fast_small-44b27eb6.weights.h5&src=0",
     },
     "fast_base": {
         "input_shape": (1024, 1024, 3),
         "mean": (0.798, 0.785, 0.772),
         "std": (0.264, 0.2749, 0.287),
-        "url": "https://doctr-static.mindee.com/models?id=v0.8.1/fast_base-255e2ac3.zip&src=0",
+        "url": "https://doctr-static.mindee.com/models?id=v0.9.0/fast_base-f2c6c736.weights.h5&src=0",
     },
 }
 
@@ -50,7 +49,6 @@ class FastNeck(layers.Layer, NestedObject):
     """Neck of the FAST architecture, composed of a series of 3x3 convolutions and upsampling layer.
 
     Args:
-    ----
         in_channels: number of input channels
         out_channels: number of output channels
     """
@@ -78,7 +76,6 @@ class FastHead(Sequential):
     """Head of the FAST architecture
 
     Args:
-    ----
         in_channels: number of input channels
         num_classes: number of output classes
         out_channels: number of output channels
@@ -100,12 +97,11 @@ class FastHead(Sequential):
         super().__init__(_layers)
 
 
-class FAST(_FAST, keras.Model, NestedObject):
+class FAST(_FAST, Model, NestedObject):
     """FAST as described in `"FAST: Faster Arbitrarily-Shaped Text Detector with Minimalist Kernel Representation"
     <https://arxiv.org/pdf/2111.02394.pdf>`_.
 
     Args:
-    ----
         feature extractor: the backbone serving as feature extractor
         bin_thresh: threshold for binarization
         box_thresh: minimal objectness score to consider a box
@@ -117,7 +113,7 @@ class FAST(_FAST, keras.Model, NestedObject):
         class_names: list of class names
     """
 
-    _children_names: List[str] = ["feat_extractor", "neck", "head", "postprocessor"]
+    _children_names: list[str] = ["feat_extractor", "neck", "head", "postprocessor"]
 
     def __init__(
         self,
@@ -128,8 +124,8 @@ class FAST(_FAST, keras.Model, NestedObject):
         pooling_size: int = 4,  # different from paper performs better on close text-rich images
         assume_straight_pages: bool = True,
         exportable: bool = False,
-        cfg: Optional[Dict[str, Any]] = {},
-        class_names: List[str] = [CLASS_NAME],
+        cfg: dict[str, Any] = {},
+        class_names: list[str] = [CLASS_NAME],
     ) -> None:
         super().__init__()
         self.class_names = class_names
@@ -160,19 +156,17 @@ class FAST(_FAST, keras.Model, NestedObject):
     def compute_loss(
         self,
         out_map: tf.Tensor,
-        target: List[Dict[str, np.ndarray]],
+        target: list[dict[str, np.ndarray]],
         eps: float = 1e-6,
     ) -> tf.Tensor:
         """Compute fast loss, 2 x Dice loss where the text kernel loss is scaled by 0.5.
 
         Args:
-        ----
             out_map: output feature map of the model of shape (N, num_classes, H, W)
             target: list of dictionary where each dict has a `boxes` and a `flags` entry
             eps: epsilon factor in dice loss
 
         Returns:
-        -------
             A loss tensor
         """
         targets = self.build_target(target, out_map.shape[1:], True)
@@ -223,18 +217,18 @@ class FAST(_FAST, keras.Model, NestedObject):
     def call(
         self,
         x: tf.Tensor,
-        target: Optional[List[Dict[str, np.ndarray]]] = None,
+        target: list[dict[str, np.ndarray]] | None = None,
         return_model_output: bool = False,
         return_preds: bool = False,
         **kwargs: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         feat_maps = self.feat_extractor(x, **kwargs)
         # Pass through the Neck & Head & Upsample
         feat_concat = self.neck(feat_maps, **kwargs)
         logits: tf.Tensor = self.head(feat_concat, **kwargs)
         logits = layers.UpSampling2D(size=x.shape[-2] // logits.shape[-2], interpolation="bilinear")(logits, **kwargs)
 
-        out: Dict[str, tf.Tensor] = {}
+        out: dict[str, tf.Tensor] = {}
         if self.exportable:
             out["logits"] = logits
             return out
@@ -256,15 +250,14 @@ class FAST(_FAST, keras.Model, NestedObject):
         return out
 
 
-def reparameterize(model: Union[FAST, layers.Layer]) -> FAST:
+def reparameterize(model: FAST | layers.Layer) -> FAST:
     """Fuse batchnorm and conv layers and reparameterize the model
 
     args:
-    ----
+
         model: the FAST model to reparameterize
 
     Returns:
-    -------
         the reparameterized model
     """
     last_conv = None
@@ -307,9 +300,9 @@ def _fast(
     arch: str,
     pretrained: bool,
     backbone_fn,
-    feat_layers: List[str],
+    feat_layers: list[str],
     pretrained_backbone: bool = True,
-    input_shape: Optional[Tuple[int, int, int]] = None,
+    input_shape: tuple[int, int, int] | None = None,
     **kwargs: Any,
 ) -> FAST:
     pretrained_backbone = pretrained_backbone and not pretrained
@@ -334,12 +327,16 @@ def _fast(
 
     # Build the model
     model = FAST(feat_extractor, cfg=_cfg, **kwargs)
+    _build_model(model)
+
     # Load pretrained parameters
     if pretrained:
-        load_pretrained_params(model, _cfg["url"])
-
-    # Build the model for reparameterization to access the layers
-    _ = model(tf.random.uniform(shape=[1, *_cfg["input_shape"]], maxval=1, dtype=tf.float32), training=False)
+        # The given class_names differs from the pretrained model => skip the mismatching layers for fine tuning
+        load_pretrained_params(
+            model,
+            _cfg["url"],
+            skip_mismatch=kwargs["class_names"] != default_cfgs[arch].get("class_names", [CLASS_NAME]),
+        )
 
     return model
 
@@ -355,12 +352,10 @@ def fast_tiny(pretrained: bool = False, **kwargs: Any) -> FAST:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained (bool): If True, returns a model pre-trained on our text detection dataset
         **kwargs: keyword arguments of the DBNet architecture
 
     Returns:
-    -------
         text detection architecture
     """
     return _fast(
@@ -383,12 +378,10 @@ def fast_small(pretrained: bool = False, **kwargs: Any) -> FAST:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained (bool): If True, returns a model pre-trained on our text detection dataset
         **kwargs: keyword arguments of the DBNet architecture
 
     Returns:
-    -------
         text detection architecture
     """
     return _fast(
@@ -411,12 +404,10 @@ def fast_base(pretrained: bool = False, **kwargs: Any) -> FAST:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained (bool): If True, returns a model pre-trained on our text detection dataset
         **kwargs: keyword arguments of the DBNet architecture
 
     Returns:
-    -------
         text detection architecture
     """
     return _fast(

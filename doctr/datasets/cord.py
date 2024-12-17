@@ -6,7 +6,7 @@
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any
 
 import numpy as np
 from tqdm import tqdm
@@ -29,10 +29,10 @@ class CORD(VisionDataset):
     >>> img, target = train_set[0]
 
     Args:
-    ----
         train: whether the subset should be the training one
         use_polygons: whether polygons should be considered as rotated bounding box (instead of straight ones)
         recognition_task: whether the dataset should be used for recognition task
+        detection_task: whether the dataset should be used for detection task
         **kwargs: keyword arguments from `VisionDataset`.
     """
 
@@ -53,6 +53,7 @@ class CORD(VisionDataset):
         train: bool = True,
         use_polygons: bool = False,
         recognition_task: bool = False,
+        detection_task: bool = False,
         **kwargs: Any,
     ) -> None:
         url, sha256, name = self.TRAIN if train else self.TEST
@@ -64,10 +65,15 @@ class CORD(VisionDataset):
             pre_transforms=convert_target_to_relative if not recognition_task else None,
             **kwargs,
         )
+        if recognition_task and detection_task:
+            raise ValueError(
+                "`recognition_task` and `detection_task` cannot be set to True simultaneously. "
+                + "To get the whole dataset with boxes and labels leave both parameters to False."
+            )
 
-        # List images
+        # list images
         tmp_root = os.path.join(self.root, "image")
-        self.data: List[Tuple[Union[str, np.ndarray], Union[str, Dict[str, Any]]]] = []
+        self.data: list[tuple[str | np.ndarray, str | dict[str, Any] | np.ndarray]] = []
         self.train = train
         np_dtype = np.float32
         for img_path in tqdm(iterable=os.listdir(tmp_root), desc="Unpacking CORD", total=len(os.listdir(tmp_root))):
@@ -84,7 +90,7 @@ class CORD(VisionDataset):
                         if len(word["text"]) > 0:
                             x = word["quad"]["x1"], word["quad"]["x2"], word["quad"]["x3"], word["quad"]["x4"]
                             y = word["quad"]["y1"], word["quad"]["y2"], word["quad"]["y3"], word["quad"]["y4"]
-                            box: Union[List[float], np.ndarray]
+                            box: list[float] | np.ndarray
                             if use_polygons:
                                 # (x, y) coordinates of top left, top right, bottom right, bottom left corners
                                 box = np.array(
@@ -109,6 +115,8 @@ class CORD(VisionDataset):
                 )
                 for crop, label in zip(crops, list(text_targets)):
                     self.data.append((crop, label))
+            elif detection_task:
+                self.data.append((img_path, np.asarray(box_targets, dtype=int).clip(min=0)))
             else:
                 self.data.append((
                     img_path,

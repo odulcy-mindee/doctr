@@ -4,7 +4,7 @@
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
 import math
-from typing import Any, List, Tuple, Union
+from typing import Any
 
 import numpy as np
 import torch
@@ -22,19 +22,19 @@ class PreProcessor(nn.Module):
     """Implements an abstract preprocessor object which performs casting, resizing, batching and normalization.
 
     Args:
-    ----
         output_size: expected size of each page in format (H, W)
         batch_size: the size of page batches
         mean: mean value of the training distribution by channel
         std: standard deviation of the training distribution by channel
+        **kwargs: additional arguments for the resizing operation
     """
 
     def __init__(
         self,
-        output_size: Tuple[int, int],
+        output_size: tuple[int, int],
         batch_size: int,
-        mean: Tuple[float, float, float] = (0.5, 0.5, 0.5),
-        std: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+        mean: tuple[float, float, float] = (0.5, 0.5, 0.5),
+        std: tuple[float, float, float] = (1.0, 1.0, 1.0),
         **kwargs: Any,
     ) -> None:
         super().__init__()
@@ -43,15 +43,13 @@ class PreProcessor(nn.Module):
         # Perform the division by 255 at the same time
         self.normalize = T.Normalize(mean, std)
 
-    def batch_inputs(self, samples: List[torch.Tensor]) -> List[torch.Tensor]:
+    def batch_inputs(self, samples: list[torch.Tensor]) -> list[torch.Tensor]:
         """Gather samples into batches for inference purposes
 
         Args:
-        ----
             samples: list of samples of shape (C, H, W)
 
         Returns:
-        -------
             list of batched samples (*, C, H, W)
         """
         num_batches = int(math.ceil(len(samples) / self.batch_size))
@@ -62,7 +60,7 @@ class PreProcessor(nn.Module):
 
         return batches
 
-    def sample_transforms(self, x: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+    def sample_transforms(self, x: np.ndarray | torch.Tensor) -> torch.Tensor:
         if x.ndim != 3:
             raise AssertionError("expected list of 3D Tensors")
         if isinstance(x, np.ndarray):
@@ -79,17 +77,15 @@ class PreProcessor(nn.Module):
         else:
             x = x.to(dtype=torch.float32)  # type: ignore[union-attr]
 
-        return x
+        return x  # type: ignore[return-value]
 
-    def __call__(self, x: Union[torch.Tensor, np.ndarray, List[Union[torch.Tensor, np.ndarray]]]) -> List[torch.Tensor]:
+    def __call__(self, x: torch.Tensor | np.ndarray | list[torch.Tensor | np.ndarray]) -> list[torch.Tensor]:
         """Prepare document data for model forwarding
 
         Args:
-        ----
             x: list of images (np.array) or tensors (already resized and batched)
 
         Returns:
-        -------
             list of page batches
         """
         # Input type check
@@ -103,7 +99,7 @@ class PreProcessor(nn.Module):
             elif x.dtype not in (torch.uint8, torch.float16, torch.float32):
                 raise TypeError("unsupported data type for torch.Tensor")
             # Resizing
-            if x.shape[-2] != self.resize.size[0] or x.shape[-1] != self.resize.size[1]:
+            if x.shape[-2] != self.resize.size[0] or x.shape[-1] != self.resize.size[1]:  # type: ignore[union-attr]
                 x = F.resize(
                     x, self.resize.size, interpolation=self.resize.interpolation, antialias=self.resize.antialias
                 )
@@ -118,11 +114,11 @@ class PreProcessor(nn.Module):
             # Sample transform (to tensor, resize)
             samples = list(multithread_exec(self.sample_transforms, x))
             # Batching
-            batches = self.batch_inputs(samples)
+            batches = self.batch_inputs(samples)  # type: ignore[assignment]
         else:
             raise TypeError(f"invalid input type: {type(x)}")
 
         # Batch transforms (normalize)
         batches = list(multithread_exec(self.normalize, batches))
 
-        return batches
+        return batches  # type: ignore[return-value]

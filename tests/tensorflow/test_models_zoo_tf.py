@@ -6,6 +6,8 @@ from doctr.file_utils import CLASS_NAME
 from doctr.io import Document, DocumentFile
 from doctr.io.elements import KIEDocument
 from doctr.models import detection, recognition
+from doctr.models.classification import mobilenet_v3_small_crop_orientation, mobilenet_v3_small_page_orientation
+from doctr.models.classification.zoo import crop_orientation_predictor, page_orientation_predictor
 from doctr.models.detection.predictor import DetectionPredictor
 from doctr.models.detection.zoo import detection_predictor
 from doctr.models.kie_predictor import KIEPredictor
@@ -23,14 +25,18 @@ class _DummyCallback:
 
 
 @pytest.mark.parametrize(
-    "assume_straight_pages, straighten_pages",
+    "assume_straight_pages, straighten_pages, disable_page_orientation, disable_crop_orientation",
     [
-        [True, False],
-        [False, False],
-        [True, True],
+        [True, False, False, False],
+        [False, False, True, True],
+        [True, True, False, False],
+        [False, True, True, True],
+        [True, False, True, False],
     ],
 )
-def test_ocrpredictor(mock_pdf, mock_vocab, assume_straight_pages, straighten_pages):
+def test_ocrpredictor(
+    mock_pdf, mock_vocab, assume_straight_pages, straighten_pages, disable_page_orientation, disable_crop_orientation
+):
     det_bsize = 4
     det_predictor = DetectionPredictor(
         PreProcessor(output_size=(512, 512), batch_size=det_bsize),
@@ -57,6 +63,17 @@ def test_ocrpredictor(mock_pdf, mock_vocab, assume_straight_pages, straighten_pa
         straighten_pages=straighten_pages,
         detect_orientation=True,
         detect_language=True,
+        resolve_blocks=True,
+        resolve_lines=True,
+        disable_page_orientation=disable_page_orientation,
+        disable_crop_orientation=disable_crop_orientation,
+    )
+
+    assert (
+        predictor._page_orientation_disabled if disable_page_orientation else not predictor._page_orientation_disabled
+    )
+    assert (
+        predictor._crop_orientation_disabled if disable_crop_orientation else not predictor._crop_orientation_disabled
     )
 
     if assume_straight_pages:
@@ -82,6 +99,24 @@ def test_ocrpredictor(mock_pdf, mock_vocab, assume_straight_pages, straighten_pa
     language = "unknown"
     assert out.pages[0].language["value"] == language
 
+    # Test with custom orientation models
+    custom_crop_orientation_model = mobilenet_v3_small_crop_orientation(pretrained=True)
+    custom_page_orientation_model = mobilenet_v3_small_page_orientation(pretrained=True)
+
+    if assume_straight_pages:
+        if predictor.detect_orientation or predictor.straighten_pages:
+            # Overwrite the default orientation models
+            predictor.crop_orientation_predictor = crop_orientation_predictor(custom_crop_orientation_model)
+            predictor.page_orientation_predictor = page_orientation_predictor(custom_page_orientation_model)
+    else:
+        # Overwrite the default orientation models
+        predictor.crop_orientation_predictor = crop_orientation_predictor(custom_crop_orientation_model)
+        predictor.page_orientation_predictor = page_orientation_predictor(custom_page_orientation_model)
+
+    out = predictor(doc)
+    orientation = 0
+    assert out.pages[0].orientation["value"] == orientation
+
 
 def test_trained_ocr_predictor(mock_payslip):
     doc = DocumentFile.from_images(mock_payslip)
@@ -102,6 +137,8 @@ def test_trained_ocr_predictor(mock_payslip):
         assume_straight_pages=True,
         straighten_pages=True,
         preserve_aspect_ratio=False,
+        resolve_blocks=True,
+        resolve_lines=True,
     )
     # test hooks
     predictor.add_hook(_DummyCallback())
@@ -132,6 +169,8 @@ def test_trained_ocr_predictor(mock_payslip):
         straighten_pages=True,
         preserve_aspect_ratio=True,
         symmetric_pad=True,
+        resolve_blocks=True,
+        resolve_lines=True,
     )
 
     out = predictor(doc)
@@ -140,14 +179,18 @@ def test_trained_ocr_predictor(mock_payslip):
 
 
 @pytest.mark.parametrize(
-    "assume_straight_pages, straighten_pages",
+    "assume_straight_pages, straighten_pages, disable_page_orientation, disable_crop_orientation",
     [
-        [True, False],
-        [False, False],
-        [True, True],
+        [True, False, False, False],
+        [False, False, True, True],
+        [True, True, False, False],
+        [False, True, True, True],
+        [True, False, True, False],
     ],
 )
-def test_kiepredictor(mock_pdf, mock_vocab, assume_straight_pages, straighten_pages):
+def test_kiepredictor(
+    mock_pdf, mock_vocab, assume_straight_pages, straighten_pages, disable_page_orientation, disable_crop_orientation
+):
     det_bsize = 4
     det_predictor = DetectionPredictor(
         PreProcessor(output_size=(512, 512), batch_size=det_bsize),
@@ -174,6 +217,17 @@ def test_kiepredictor(mock_pdf, mock_vocab, assume_straight_pages, straighten_pa
         straighten_pages=straighten_pages,
         detect_orientation=True,
         detect_language=True,
+        resolve_blocks=True,
+        resolve_lines=True,
+        disable_page_orientation=disable_page_orientation,
+        disable_crop_orientation=disable_crop_orientation,
+    )
+
+    assert (
+        predictor._page_orientation_disabled if disable_page_orientation else not predictor._page_orientation_disabled
+    )
+    assert (
+        predictor._crop_orientation_disabled if disable_crop_orientation else not predictor._crop_orientation_disabled
     )
 
     if assume_straight_pages:
@@ -199,6 +253,24 @@ def test_kiepredictor(mock_pdf, mock_vocab, assume_straight_pages, straighten_pa
     language = "unknown"
     assert out.pages[0].language["value"] == language
 
+    # Test with custom orientation models
+    custom_crop_orientation_model = mobilenet_v3_small_crop_orientation(pretrained=True)
+    custom_page_orientation_model = mobilenet_v3_small_page_orientation(pretrained=True)
+
+    if assume_straight_pages:
+        if predictor.detect_orientation or predictor.straighten_pages:
+            # Overwrite the default orientation models
+            predictor.crop_orientation_predictor = crop_orientation_predictor(custom_crop_orientation_model)
+            predictor.page_orientation_predictor = page_orientation_predictor(custom_page_orientation_model)
+    else:
+        # Overwrite the default orientation models
+        predictor.crop_orientation_predictor = crop_orientation_predictor(custom_crop_orientation_model)
+        predictor.page_orientation_predictor = page_orientation_predictor(custom_page_orientation_model)
+
+    out = predictor(doc)
+    orientation = 0
+    assert out.pages[0].orientation["value"] == orientation
+
 
 def test_trained_kie_predictor(mock_payslip):
     doc = DocumentFile.from_images(mock_payslip)
@@ -219,6 +291,8 @@ def test_trained_kie_predictor(mock_payslip):
         assume_straight_pages=True,
         straighten_pages=True,
         preserve_aspect_ratio=False,
+        resolve_blocks=True,
+        resolve_lines=True,
     )
     # test hooks
     predictor.add_hook(_DummyCallback())
@@ -250,6 +324,8 @@ def test_trained_kie_predictor(mock_payslip):
         straighten_pages=True,
         preserve_aspect_ratio=True,
         symmetric_pad=True,
+        resolve_blocks=True,
+        resolve_lines=True,
     )
 
     out = predictor(doc)

@@ -3,7 +3,8 @@
 # This program is licensed under the Apache License 2.0.
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 import torch
@@ -20,7 +21,7 @@ from .base import LinkNetPostProcessor, _LinkNet
 __all__ = ["LinkNet", "linknet_resnet18", "linknet_resnet34", "linknet_resnet50"]
 
 
-default_cfgs: Dict[str, Dict[str, Any]] = {
+default_cfgs: dict[str, dict[str, Any]] = {
     "linknet_resnet18": {
         "input_shape": (3, 1024, 1024),
         "mean": (0.798, 0.785, 0.772),
@@ -43,7 +44,7 @@ default_cfgs: Dict[str, Dict[str, Any]] = {
 
 
 class LinkNetFPN(nn.Module):
-    def __init__(self, layer_shapes: List[Tuple[int, int, int]]) -> None:
+    def __init__(self, layer_shapes: list[tuple[int, int, int]]) -> None:
         super().__init__()
         strides = [
             1 if (in_shape[-1] == out_shape[-1]) else 2
@@ -74,7 +75,7 @@ class LinkNetFPN(nn.Module):
             nn.ReLU(inplace=True),
         )
 
-    def forward(self, feats: List[torch.Tensor]) -> torch.Tensor:
+    def forward(self, feats: list[torch.Tensor]) -> torch.Tensor:
         out = feats[-1]
         for decoder, fmap in zip(self.decoders[::-1], feats[:-1][::-1]):
             out = decoder(out) + fmap
@@ -89,7 +90,6 @@ class LinkNet(nn.Module, _LinkNet):
     <https://arxiv.org/pdf/1707.03718.pdf>`_.
 
     Args:
-    ----
         feature extractor: the backbone serving as feature extractor
         bin_thresh: threshold for binarization of the output feature map
         box_thresh: minimal objectness score to consider a box
@@ -108,8 +108,8 @@ class LinkNet(nn.Module, _LinkNet):
         head_chans: int = 32,
         assume_straight_pages: bool = True,
         exportable: bool = False,
-        cfg: Optional[Dict[str, Any]] = None,
-        class_names: List[str] = [CLASS_NAME],
+        cfg: dict[str, Any] | None = None,
+        class_names: list[str] = [CLASS_NAME],
     ) -> None:
         super().__init__()
         self.class_names = class_names
@@ -163,16 +163,16 @@ class LinkNet(nn.Module, _LinkNet):
     def forward(
         self,
         x: torch.Tensor,
-        target: Optional[List[np.ndarray]] = None,
+        target: list[np.ndarray] | None = None,
         return_model_output: bool = False,
         return_preds: bool = False,
         **kwargs: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         feats = self.feat_extractor(x)
         logits = self.fpn([feats[str(idx)] for idx in range(len(feats))])
         logits = self.classifier(logits)
 
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         if self.exportable:
             out["logits"] = logits
             return out
@@ -183,11 +183,16 @@ class LinkNet(nn.Module, _LinkNet):
             out["out_map"] = prob_map
 
         if target is None or return_preds:
-            # Post-process boxes
-            out["preds"] = [
-                dict(zip(self.class_names, preds))
-                for preds in self.postprocessor(prob_map.detach().cpu().permute((0, 2, 3, 1)).numpy())
-            ]
+            # Disable for torch.compile compatibility
+            @torch.compiler.disable  # type: ignore[attr-defined]
+            def _postprocess(prob_map: torch.Tensor) -> list[dict[str, Any]]:
+                return [
+                    dict(zip(self.class_names, preds))
+                    for preds in self.postprocessor(prob_map.detach().cpu().permute((0, 2, 3, 1)).numpy())
+                ]
+
+            # Post-process boxes (keep only text predictions)
+            out["preds"] = _postprocess(prob_map)
 
         if target is not None:
             loss = self.compute_loss(logits, target)
@@ -198,7 +203,7 @@ class LinkNet(nn.Module, _LinkNet):
     def compute_loss(
         self,
         out_map: torch.Tensor,
-        target: List[np.ndarray],
+        target: list[np.ndarray],
         gamma: float = 2.0,
         alpha: float = 0.5,
         eps: float = 1e-8,
@@ -207,7 +212,6 @@ class LinkNet(nn.Module, _LinkNet):
         <https://github.com/tensorflow/addons/>`_.
 
         Args:
-        ----
             out_map: output feature map of the model of shape (N, num_classes, H, W)
             target: list of dictionary where each dict has a `boxes` and a `flags` entry
             gamma: modulating factor in the focal loss formula
@@ -215,7 +219,6 @@ class LinkNet(nn.Module, _LinkNet):
             eps: epsilon factor in dice loss
 
         Returns:
-        -------
             A loss tensor
         """
         _target, _mask = self.build_target(target, out_map.shape[1:], False)  # type: ignore[arg-type]
@@ -252,9 +255,9 @@ def _linknet(
     arch: str,
     pretrained: bool,
     backbone_fn: Callable[[bool], nn.Module],
-    fpn_layers: List[str],
+    fpn_layers: list[str],
     pretrained_backbone: bool = True,
-    ignore_keys: Optional[List[str]] = None,
+    ignore_keys: list[str] | None = None,
     **kwargs: Any,
 ) -> LinkNet:
     pretrained_backbone = pretrained_backbone and not pretrained
@@ -295,12 +298,10 @@ def linknet_resnet18(pretrained: bool = False, **kwargs: Any) -> LinkNet:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained (bool): If True, returns a model pre-trained on our text detection dataset
         **kwargs: keyword arguments of the LinkNet architecture
 
     Returns:
-    -------
         text detection architecture
     """
     return _linknet(
@@ -327,12 +328,10 @@ def linknet_resnet34(pretrained: bool = False, **kwargs: Any) -> LinkNet:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained (bool): If True, returns a model pre-trained on our text detection dataset
         **kwargs: keyword arguments of the LinkNet architecture
 
     Returns:
-    -------
         text detection architecture
     """
     return _linknet(
@@ -359,12 +358,10 @@ def linknet_resnet50(pretrained: bool = False, **kwargs: Any) -> LinkNet:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained (bool): If True, returns a model pre-trained on our text detection dataset
         **kwargs: keyword arguments of the LinkNet architecture
 
     Returns:
-    -------
         text detection architecture
     """
     return _linknet(

@@ -4,7 +4,7 @@
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
 import math
-from typing import Any, Tuple
+from typing import Any
 
 import tensorflow as tf
 from tensorflow.keras import layers
@@ -17,12 +17,12 @@ __all__ = ["PatchEmbedding"]
 class PatchEmbedding(layers.Layer, NestedObject):
     """Compute 2D patch embeddings with cls token and positional encoding"""
 
-    def __init__(self, input_shape: Tuple[int, int, int], embed_dim: int, patch_size: Tuple[int, int]) -> None:
+    def __init__(self, input_shape: tuple[int, int, int], embed_dim: int, patch_size: tuple[int, int]) -> None:
         super().__init__()
         height, width, _ = input_shape
         self.patch_size = patch_size
         self.interpolate = True if patch_size[0] == patch_size[1] else False
-        self.grid_size = tuple([s // p for s, p in zip((height, width), self.patch_size)])
+        self.grid_size = tuple(s // p for s, p in zip((height, width), self.patch_size))
         self.num_patches = self.grid_size[0] * self.grid_size[1]
 
         self.cls_token = self.add_weight(shape=(1, 1, embed_dim), initializer="zeros", trainable=True, name="cls_token")

@@ -3,7 +3,8 @@
 # This program is licensed under the Apache License 2.0.
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 import torch
@@ -22,7 +23,7 @@ from .base import DBPostProcessor, _DBNet
 __all__ = ["DBNet", "db_resnet50", "db_resnet34", "db_mobilenet_v3_large"]
 
 
-default_cfgs: Dict[str, Dict[str, Any]] = {
+default_cfgs: dict[str, dict[str, Any]] = {
     "db_resnet50": {
         "input_shape": (3, 1024, 1024),
         "mean": (0.798, 0.785, 0.772),
@@ -47,7 +48,7 @@ default_cfgs: Dict[str, Dict[str, Any]] = {
 class FeaturePyramidNetwork(nn.Module):
     def __init__(
         self,
-        in_channels: List[int],
+        in_channels: list[int],
         out_channels: int,
         deform_conv: bool = False,
     ) -> None:
@@ -57,35 +58,31 @@ class FeaturePyramidNetwork(nn.Module):
 
         conv_layer = DeformConv2d if deform_conv else nn.Conv2d
 
-        self.in_branches = nn.ModuleList(
-            [
-                nn.Sequential(
-                    conv_layer(chans, out_channels, 1, bias=False),
-                    nn.BatchNorm2d(out_channels),
-                    nn.ReLU(inplace=True),
-                )
-                for idx, chans in enumerate(in_channels)
-            ]
-        )
+        self.in_branches = nn.ModuleList([
+            nn.Sequential(
+                conv_layer(chans, out_channels, 1, bias=False),
+                nn.BatchNorm2d(out_channels),
+                nn.ReLU(inplace=True),
+            )
+            for idx, chans in enumerate(in_channels)
+        ])
         self.upsample = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True)
-        self.out_branches = nn.ModuleList(
-            [
-                nn.Sequential(
-                    conv_layer(out_channels, out_chans, 3, padding=1, bias=False),
-                    nn.BatchNorm2d(out_chans),
-                    nn.ReLU(inplace=True),
-                    nn.Upsample(scale_factor=2**idx, mode="bilinear", align_corners=True),
-                )
-                for idx, chans in enumerate(in_channels)
-            ]
-        )
+        self.out_branches = nn.ModuleList([
+            nn.Sequential(
+                conv_layer(out_channels, out_chans, 3, padding=1, bias=False),
+                nn.BatchNorm2d(out_chans),
+                nn.ReLU(inplace=True),
+                nn.Upsample(scale_factor=2**idx, mode="bilinear", align_corners=True),
+            )
+            for idx, chans in enumerate(in_channels)
+        ])
 
-    def forward(self, x: List[torch.Tensor]) -> torch.Tensor:
+    def forward(self, x: list[torch.Tensor]) -> torch.Tensor:
         if len(x) != len(self.out_branches):
             raise AssertionError
         # Conv1x1 to get the same number of channels
-        _x: List[torch.Tensor] = [branch(t) for branch, t in zip(self.in_branches, x)]
-        out: List[torch.Tensor] = [_x[-1]]
+        _x: list[torch.Tensor] = [branch(t) for branch, t in zip(self.in_branches, x)]
+        out: list[torch.Tensor] = [_x[-1]]
         for t in _x[:-1][::-1]:
             out.append(self.upsample(out[-1]) + t)
 
@@ -100,7 +97,6 @@ class DBNet(_DBNet, nn.Module):
     <https://arxiv.org/pdf/1911.08947.pdf>`_.
 
     Args:
-    ----
         feature extractor: the backbone serving as feature extractor
         head_chans: the number of channels in the head
         deform_conv: whether to use deformable convolution
@@ -121,8 +117,8 @@ class DBNet(_DBNet, nn.Module):
         box_thresh: float = 0.1,
         assume_straight_pages: bool = True,
         exportable: bool = False,
-        cfg: Optional[Dict[str, Any]] = None,
-        class_names: List[str] = [CLASS_NAME],
+        cfg: dict[str, Any] | None = None,
+        class_names: list[str] = [CLASS_NAME],
     ) -> None:
         super().__init__()
         self.class_names = class_names
@@ -186,10 +182,10 @@ class DBNet(_DBNet, nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        target: Optional[List[np.ndarray]] = None,
+        target: list[np.ndarray] | None = None,
         return_model_output: bool = False,
         return_preds: bool = False,
-    ) -> Dict[str, torch.Tensor]:
+    ) -> dict[str, torch.Tensor]:
         # Extract feature maps at different stages
         feats = self.feat_extractor(x)
         feats = [feats[str(idx)] for idx in range(len(feats))]
@@ -197,7 +193,7 @@ class DBNet(_DBNet, nn.Module):
         feat_concat = self.fpn(feats)
         logits = self.prob_head(feat_concat)
 
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         if self.exportable:
             out["logits"] = logits
             return out
@@ -209,11 +205,16 @@ class DBNet(_DBNet, nn.Module):
             out["out_map"] = prob_map
 
         if target is None or return_preds:
+            # Disable for torch.compile compatibility
+            @torch.compiler.disable  # type: ignore[attr-defined]
+            def _postprocess(prob_map: torch.Tensor) -> list[dict[str, Any]]:
+                return [
+                    dict(zip(self.class_names, preds))
+                    for preds in self.postprocessor(prob_map.detach().cpu().permute((0, 2, 3, 1)).numpy())
+                ]
+
             # Post-process boxes (keep only text predictions)
-            out["preds"] = [
-                dict(zip(self.class_names, preds))
-                for preds in self.postprocessor(prob_map.detach().cpu().permute((0, 2, 3, 1)).numpy())
-            ]
+            out["preds"] = _postprocess(prob_map)
 
         if target is not None:
             thresh_map = self.thresh_head(feat_concat)
@@ -226,7 +227,7 @@ class DBNet(_DBNet, nn.Module):
         self,
         out_map: torch.Tensor,
         thresh_map: torch.Tensor,
-        target: List[np.ndarray],
+        target: list[np.ndarray],
         gamma: float = 2.0,
         alpha: float = 0.5,
         eps: float = 1e-8,
@@ -235,7 +236,6 @@ class DBNet(_DBNet, nn.Module):
         and a list of masks for each image. From there it computes the loss with the model output
 
         Args:
-        ----
             out_map: output feature map of the model of shape (N, C, H, W)
             thresh_map: threshold map of shape (N, C, H, W)
             target: list of dictionary where each dict has a `boxes` and a `flags` entry
@@ -244,7 +244,6 @@ class DBNet(_DBNet, nn.Module):
             eps: epsilon factor in dice loss
 
         Returns:
-        -------
             A loss tensor
         """
         if gamma < 0:
@@ -277,7 +276,7 @@ class DBNet(_DBNet, nn.Module):
                 dice_map = torch.softmax(out_map, dim=1)
             else:
                 # compute binary map instead
-                dice_map = 1 / (1 + torch.exp(-50.0 * (prob_map - thresh_map)))
+                dice_map = 1 / (1 + torch.exp(-50.0 * (prob_map - thresh_map)))  # type: ignore[assignment]
             # Class reduced
             inter = (seg_mask * dice_map * seg_target).sum((0, 2, 3))
             cardinality = (seg_mask * (dice_map + seg_target)).sum((0, 2, 3))
@@ -295,10 +294,10 @@ def _dbnet(
     arch: str,
     pretrained: bool,
     backbone_fn: Callable[[bool], nn.Module],
-    fpn_layers: List[str],
-    backbone_submodule: Optional[str] = None,
+    fpn_layers: list[str],
+    backbone_submodule: str | None = None,
     pretrained_backbone: bool = True,
-    ignore_keys: Optional[List[str]] = None,
+    ignore_keys: list[str] | None = None,
     **kwargs: Any,
 ) -> DBNet:
     pretrained_backbone = pretrained_backbone and not pretrained
@@ -346,12 +345,10 @@ def db_resnet34(pretrained: bool = False, **kwargs: Any) -> DBNet:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained (bool): If True, returns a model pre-trained on our text detection dataset
         **kwargs: keyword arguments of the DBNet architecture
 
     Returns:
-    -------
         text detection architecture
     """
     return _dbnet(
@@ -381,12 +378,10 @@ def db_resnet50(pretrained: bool = False, **kwargs: Any) -> DBNet:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained (bool): If True, returns a model pre-trained on our text detection dataset
         **kwargs: keyword arguments of the DBNet architecture
 
     Returns:
-    -------
         text detection architecture
     """
     return _dbnet(
@@ -416,12 +411,10 @@ def db_mobilenet_v3_large(pretrained: bool = False, **kwargs: Any) -> DBNet:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained (bool): If True, returns a model pre-trained on our text detection dataset
         **kwargs: keyword arguments of the DBNet architecture
 
     Returns:
-    -------
         text detection architecture
     """
     return _dbnet(

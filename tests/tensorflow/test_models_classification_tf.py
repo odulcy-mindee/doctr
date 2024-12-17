@@ -45,6 +45,11 @@ def test_classification_architectures(arch_name, input_shape, output_size):
     assert isinstance(out, tf.Tensor)
     assert out.dtype == tf.float32
     assert out.numpy().shape == (batch_size, *output_size)
+    # Check that you can load pretrained up to the classification layer with differing number of classes to fine-tune
+    tf.keras.backend.clear_session()
+    assert classification.__dict__[arch_name](
+        pretrained=True, include_top=True, input_shape=input_shape, num_classes=10
+    )
 
 
 @pytest.mark.parametrize(
@@ -113,6 +118,25 @@ def test_crop_orientation_model(mock_text_box):
     assert classifier([text_box_0, text_box_270, text_box_180, text_box_90])[1] == [0, -90, 180, 90]
     assert all(isinstance(pred, float) for pred in classifier([text_box_0, text_box_270, text_box_180, text_box_90])[2])
 
+    # Test with disabled predictor
+    classifier = classification.crop_orientation_predictor(
+        "mobilenet_v3_small_crop_orientation", pretrained=False, disabled=True
+    )
+    assert classifier([text_box_0, text_box_270, text_box_180, text_box_90]) == [
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [1.0, 1.0, 1.0, 1.0],
+    ]
+
+    # Test custom model loading
+    classifier = classification.crop_orientation_predictor(
+        classification.mobilenet_v3_small_crop_orientation(pretrained=True)
+    )
+    assert isinstance(classifier, OrientationPredictor)
+
+    with pytest.raises(ValueError):
+        _ = classification.crop_orientation_predictor(classification.textnet_tiny(pretrained=True))
+
 
 def test_page_orientation_model(mock_payslip):
     text_box_0 = cv2.imread(mock_payslip)
@@ -120,11 +144,30 @@ def test_page_orientation_model(mock_payslip):
     text_box_270 = np.rot90(text_box_0, 1)
     text_box_180 = np.rot90(text_box_0, 2)
     text_box_90 = np.rot90(text_box_0, 3)
-    classifier = classification.crop_orientation_predictor("mobilenet_v3_small_page_orientation", pretrained=True)
+    classifier = classification.page_orientation_predictor("mobilenet_v3_small_page_orientation", pretrained=True)
     assert classifier([text_box_0, text_box_270, text_box_180, text_box_90])[0] == [0, 1, 2, 3]
     # 270 degrees is equivalent to -90 degrees
     assert classifier([text_box_0, text_box_270, text_box_180, text_box_90])[1] == [0, -90, 180, 90]
     assert all(isinstance(pred, float) for pred in classifier([text_box_0, text_box_270, text_box_180, text_box_90])[2])
+
+    # Test with disabled predictor
+    classifier = classification.page_orientation_predictor(
+        "mobilenet_v3_small_page_orientation", pretrained=False, disabled=True
+    )
+    assert classifier([text_box_0, text_box_270, text_box_180, text_box_90]) == [
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [1.0, 1.0, 1.0, 1.0],
+    ]
+
+    # Test custom model loading
+    classifier = classification.page_orientation_predictor(
+        classification.mobilenet_v3_small_page_orientation(pretrained=True)
+    )
+    assert isinstance(classifier, OrientationPredictor)
+
+    with pytest.raises(ValueError):
+        _ = classification.page_orientation_predictor(classification.textnet_tiny(pretrained=True))
 
 
 # temporarily fix to avoid killing the CI (tf2onnx v1.14 memory leak issue)
@@ -208,7 +251,6 @@ def test_models_onnx_export(arch_name, input_shape, output_size):
         model_path, output = export_model_to_onnx(
             model, model_name=os.path.join(tmpdir, "model"), dummy_input=dummy_input
         )
-
         assert os.path.exists(model_path)
         # Inference
         ort_session = onnxruntime.InferenceSession(

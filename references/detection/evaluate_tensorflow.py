@@ -5,6 +5,10 @@
 
 import os
 
+from doctr.file_utils import ensure_keras_v2
+
+ensure_keras_v2()
+
 from doctr.file_utils import CLASS_NAME
 
 os.environ["USE_TF"] = "1"
@@ -17,7 +21,7 @@ import tensorflow as tf
 from tensorflow.keras import mixed_precision
 from tqdm import tqdm
 
-gpu_devices = tf.config.experimental.list_physical_devices("GPU")
+gpu_devices = tf.config.list_physical_devices("GPU")
 if any(gpu_devices):
     tf.config.experimental.set_memory_growth(gpu_devices[0], True)
 
@@ -35,8 +39,8 @@ def evaluate(model, val_loader, batch_transforms, val_metric):
     val_loss, batch_cnt = 0, 0
     for images, targets in tqdm(val_loader):
         images = batch_transforms(images)
-        targets = [{CLASS_NAME: t["boxes"]} for t in targets]
-        out = model(images, targets, training=False, return_preds=True)
+        targets = [{CLASS_NAME: t} for t in targets]
+        out = model(images, target=targets, training=False, return_preds=True)
         # Compute metric
         loc_preds = out["preds"]
         for target, loc_pred in zip(targets, loc_preds):
@@ -81,7 +85,10 @@ def main(args):
         train=True,
         download=True,
         use_polygons=args.rotation,
-        sample_transforms=T.Resize(input_shape[:2]),
+        detection_task=True,
+        sample_transforms=T.Resize(
+            input_shape[:2], preserve_aspect_ratio=args.keep_ratio, symmetric_pad=args.symmetric_pad
+        ),
     )
     # Monkeypatch
     subfolder = ds.root.split("/")[-2:]
@@ -91,7 +98,10 @@ def main(args):
         train=False,
         download=True,
         use_polygons=args.rotation,
-        sample_transforms=T.Resize(input_shape[:2]),
+        detection_task=True,
+        sample_transforms=T.Resize(
+            input_shape[:2], preserve_aspect_ratio=args.keep_ratio, symmetric_pad=args.symmetric_pad
+        ),
     )
     subfolder = _ds.root.split("/")[-2:]
     ds.data.extend([(os.path.join(*subfolder, name), target) for name, target in _ds.data])
@@ -102,7 +112,7 @@ def main(args):
         drop_last=False,
         shuffle=False,
     )
-    print(f"Test set loaded in {time.time() - st:.4}s ({len(ds)} samples in " f"{len(test_loader)} batches)")
+    print(f"Test set loaded in {time.time() - st:.4}s ({len(ds)} samples in {len(test_loader)} batches)")
 
     batch_transforms = T.Normalize(mean=mean, std=std)
 
@@ -112,8 +122,7 @@ def main(args):
     print("Running evaluation")
     val_loss, recall, precision, mean_iou = evaluate(model, test_loader, batch_transforms, metric)
     print(
-        f"Validation loss: {val_loss:.6} (Recall: {recall:.2%} | Precision: {precision:.2%} | "
-        f"Mean IoU: {mean_iou:.2%})"
+        f"Validation loss: {val_loss:.6} (Recall: {recall:.2%} | Precision: {precision:.2%} | Mean IoU: {mean_iou:.2%})"
     )
 
 
@@ -129,6 +138,8 @@ def parse_args():
     parser.add_argument("--dataset", type=str, default="FUNSD", help="Dataset to evaluate on")
     parser.add_argument("-b", "--batch_size", type=int, default=2, help="batch size for evaluation")
     parser.add_argument("--size", type=int, default=None, help="model input size, H = W")
+    parser.add_argument("--keep_ratio", action="store_true", help="keep the aspect ratio of the input image")
+    parser.add_argument("--symmetric_pad", action="store_true", help="pad the image symmetrically")
     parser.add_argument("--rotation", dest="rotation", action="store_true", help="inference with rotated bbox")
     parser.add_argument("--resume", type=str, default=None, help="Checkpoint to resume")
     parser.add_argument("--amp", dest="amp", help="Use Automatic Mixed Precision", action="store_true")

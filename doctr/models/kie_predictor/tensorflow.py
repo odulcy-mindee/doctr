@@ -3,7 +3,7 @@
 # This program is licensed under the Apache License 2.0.
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
-from typing import Any, Dict, List, Union
+from typing import Any
 
 import numpy as np
 import tensorflow as tf
@@ -24,7 +24,6 @@ class KIEPredictor(NestedObject, _KIEPredictor):
     """Implements an object able to localize and identify text elements in a set of documents
 
     Args:
-    ----
         det_predictor: detection module
         reco_predictor: recognition module
         assume_straight_pages: if True, speeds up the inference by assuming you only pass straight pages
@@ -69,7 +68,7 @@ class KIEPredictor(NestedObject, _KIEPredictor):
 
     def __call__(
         self,
-        pages: List[Union[np.ndarray, tf.Tensor]],
+        pages: list[np.ndarray | tf.Tensor],
         **kwargs: Any,
     ) -> Document:
         # Dimension check
@@ -99,10 +98,13 @@ class KIEPredictor(NestedObject, _KIEPredictor):
             origin_pages_orientations = None
         if self.straighten_pages:
             pages = self._straighten_pages(pages, seg_maps, general_pages_orientations, origin_pages_orientations)
-            # Forward again to get predictions on straight pages
-            loc_preds = self.det_predictor(pages, **kwargs)  # type: ignore[assignment]
+            # update page shapes after straightening
+            origin_page_shapes = [page.shape[:2] for page in pages]
 
-        dict_loc_preds: Dict[str, List[np.ndarray]] = invert_data_structure(loc_preds)  # type: ignore
+            # Forward again to get predictions on straight pages
+            loc_preds = self.det_predictor(pages, **kwargs)
+
+        dict_loc_preds: dict[str, list[np.ndarray]] = invert_data_structure(loc_preds)  # type: ignore
 
         # Detach objectness scores from loc_preds
         objectness_scores = {}
@@ -119,7 +121,11 @@ class KIEPredictor(NestedObject, _KIEPredictor):
         crops = {}
         for class_name in dict_loc_preds.keys():
             crops[class_name], dict_loc_preds[class_name] = self._prepare_crops(
-                pages, dict_loc_preds[class_name], channels_last=True, assume_straight_pages=self.assume_straight_pages
+                pages,
+                dict_loc_preds[class_name],
+                channels_last=True,
+                assume_straight_pages=self.assume_straight_pages,
+                assume_horizontal=self._page_orientation_disabled,
             )
 
         # Rectify crop orientation
@@ -141,18 +147,18 @@ class KIEPredictor(NestedObject, _KIEPredictor):
         if not crop_orientations:
             crop_orientations = {k: [{"value": 0, "confidence": None} for _ in word_preds[k]] for k in word_preds}
 
-        boxes: Dict = {}
-        text_preds: Dict = {}
-        word_crop_orientations: Dict = {}
+        boxes: dict = {}
+        text_preds: dict = {}
+        word_crop_orientations: dict = {}
         for class_name in dict_loc_preds.keys():
             boxes[class_name], text_preds[class_name], word_crop_orientations[class_name] = self._process_predictions(
                 dict_loc_preds[class_name], word_preds[class_name], crop_orientations[class_name]
             )
 
-        boxes_per_page: List[Dict] = invert_data_structure(boxes)  # type: ignore[assignment]
-        objectness_scores_per_page: List[Dict] = invert_data_structure(objectness_scores)  # type: ignore[assignment]
-        text_preds_per_page: List[Dict] = invert_data_structure(text_preds)  # type: ignore[assignment]
-        crop_orientations_per_page: List[Dict] = invert_data_structure(word_crop_orientations)  # type: ignore[assignment]
+        boxes_per_page: list[dict] = invert_data_structure(boxes)  # type: ignore[assignment]
+        objectness_scores_per_page: list[dict] = invert_data_structure(objectness_scores)  # type: ignore[assignment]
+        text_preds_per_page: list[dict] = invert_data_structure(text_preds)  # type: ignore[assignment]
+        crop_orientations_per_page: list[dict] = invert_data_structure(word_crop_orientations)  # type: ignore[assignment]
 
         if self.detect_language:
             languages = [get_language(self.get_text(text_pred)) for text_pred in text_preds_per_page]
@@ -173,7 +179,7 @@ class KIEPredictor(NestedObject, _KIEPredictor):
         return out
 
     @staticmethod
-    def get_text(text_pred: Dict) -> str:
+    def get_text(text_pred: dict) -> str:
         text = []
         for value in text_pred.values():
             text += [item[0] for item in value]

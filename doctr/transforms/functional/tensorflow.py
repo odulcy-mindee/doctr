@@ -5,8 +5,8 @@
 
 import math
 import random
+from collections.abc import Iterable
 from copy import deepcopy
-from typing import Iterable, Optional, Tuple, Union
 
 import numpy as np
 import tensorflow as tf
@@ -22,12 +22,10 @@ def invert_colors(img: tf.Tensor, min_val: float = 0.6) -> tf.Tensor:
     """Invert the colors of an image
 
     Args:
-    ----
         img : tf.Tensor, the image to invert
         min_val : minimum value of the random shift
 
     Returns:
-    -------
         the inverted image
     """
     out = tf.image.rgb_to_grayscale(img)  # Convert to gray
@@ -48,13 +46,11 @@ def rotated_img_tensor(img: tf.Tensor, angle: float, expand: bool = False) -> tf
     """Rotate image around the center, interpolation=NEAREST, pad with 0 (black)
 
     Args:
-    ----
         img: image to rotate
         angle: angle in degrees. +: counter-clockwise, -: clockwise
         expand: whether the image should be padded before the rotation
 
     Returns:
-    -------
         the rotated image (tensor)
     """
     # Compute the expanded padding
@@ -103,18 +99,16 @@ def rotate_sample(
     geoms: np.ndarray,
     angle: float,
     expand: bool = False,
-) -> Tuple[tf.Tensor, np.ndarray]:
+) -> tuple[tf.Tensor, np.ndarray]:
     """Rotate image around the center, interpolation=NEAREST, pad with 0 (black)
 
     Args:
-    ----
         img: image to rotate
         geoms: array of geometries of shape (N, 4) or (N, 4, 2)
         angle: angle in degrees. +: counter-clockwise, -: clockwise
         expand: whether the image should be padded before the rotation
 
     Returns:
-    -------
         A tuple of rotated img (tensor), rotated boxes (np array)
     """
     # Rotated the image
@@ -140,22 +134,20 @@ def rotate_sample(
     rotated_geoms[..., 0] = rotated_geoms[..., 0] / rotated_img.shape[1]
     rotated_geoms[..., 1] = rotated_geoms[..., 1] / rotated_img.shape[0]
 
-    return rotated_img, np.clip(rotated_geoms, 0, 1)
+    return rotated_img, np.clip(np.around(rotated_geoms, decimals=15), 0, 1)
 
 
 def crop_detection(
-    img: tf.Tensor, boxes: np.ndarray, crop_box: Tuple[float, float, float, float]
-) -> Tuple[tf.Tensor, np.ndarray]:
+    img: tf.Tensor, boxes: np.ndarray, crop_box: tuple[float, float, float, float]
+) -> tuple[tf.Tensor, np.ndarray]:
     """Crop and image and associated bboxes
 
     Args:
-    ----
         img: image to crop
         boxes: array of boxes to clip, absolute (int) or relative (float)
         crop_box: box (xmin, ymin, xmax, ymax) to crop the image. Relative coords.
 
     Returns:
-    -------
         A tuple of cropped image, cropped boxes, where the image is not resized.
     """
     if any(val < 0 or val > 1 for val in crop_box):
@@ -172,16 +164,15 @@ def crop_detection(
 
 def _gaussian_filter(
     img: tf.Tensor,
-    kernel_size: Union[int, Iterable[int]],
+    kernel_size: int | Iterable[int],
     sigma: float,
-    mode: Optional[str] = None,
-    pad_value: Optional[int] = 0,
+    mode: str | None = None,
+    pad_value: int = 0,
 ):
     """Apply Gaussian filter to image.
     Adapted from: https://github.com/tensorflow/addons/blob/master/tensorflow_addons/image/filters.py
 
     Args:
-    ----
         img: image to filter of shape (N, H, W, C)
         kernel_size: kernel size of the filter
         sigma: standard deviation of the Gaussian filter
@@ -189,7 +180,6 @@ def _gaussian_filter(
         pad_value: value to pad the image with
 
     Returns:
-    -------
         A tensor of shape (N, H, W, C)
     """
     ksize = tf.convert_to_tensor(tf.broadcast_to(kernel_size, [2]), dtype=tf.int32)
@@ -235,17 +225,15 @@ def _gaussian_filter(
     return tf.nn.depthwise_conv2d(img, g, [1, 1, 1, 1], padding="VALID", data_format="NHWC")
 
 
-def random_shadow(img: tf.Tensor, opacity_range: Tuple[float, float], **kwargs) -> tf.Tensor:
+def random_shadow(img: tf.Tensor, opacity_range: tuple[float, float], **kwargs) -> tf.Tensor:
     """Apply a random shadow to a given image
 
     Args:
-    ----
         img: image to modify
         opacity_range: the minimum and maximum desired opacity of the shadow
         **kwargs: additional arguments to pass to `create_shadow_mask`
 
     Returns:
-    -------
         shadowed image
     """
     shadow_mask = create_shadow_mask(img.shape[:2], **kwargs)

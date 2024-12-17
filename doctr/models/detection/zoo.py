@@ -3,7 +3,7 @@
 # This program is licensed under the Apache License 2.0.
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
-from typing import Any, List
+from typing import Any
 
 from doctr.file_utils import is_tf_available, is_torch_available
 
@@ -14,7 +14,7 @@ from .predictor import DetectionPredictor
 
 __all__ = ["detection_predictor"]
 
-ARCHS: List[str]
+ARCHS: list[str]
 
 
 if is_tf_available():
@@ -56,11 +56,19 @@ def _predictor(arch: Any, pretrained: bool, assume_straight_pages: bool = True, 
         if isinstance(_model, detection.FAST):
             _model = reparameterize(_model)
     else:
-        if not isinstance(arch, (detection.DBNet, detection.LinkNet, detection.FAST)):
+        allowed_archs = [detection.DBNet, detection.LinkNet, detection.FAST]
+        if is_torch_available():
+            # Adding the type for torch compiled models to the allowed architectures
+            from doctr.models.utils import _CompiledModule
+
+            allowed_archs.append(_CompiledModule)
+
+        if not isinstance(arch, tuple(allowed_archs)):
             raise ValueError(f"unknown architecture: {type(arch)}")
 
         _model = arch
         _model.assume_straight_pages = assume_straight_pages
+        _model.postprocessor.assume_straight_pages = assume_straight_pages
 
     kwargs.pop("pretrained_backbone", None)
 
@@ -78,6 +86,9 @@ def detection_predictor(
     arch: Any = "fast_base",
     pretrained: bool = False,
     assume_straight_pages: bool = True,
+    preserve_aspect_ratio: bool = True,
+    symmetric_pad: bool = True,
+    batch_size: int = 2,
     **kwargs: Any,
 ) -> DetectionPredictor:
     """Text detection architecture.
@@ -89,14 +100,24 @@ def detection_predictor(
     >>> out = model([input_page])
 
     Args:
-    ----
         arch: name of the architecture or model itself to use (e.g. 'db_resnet50')
         pretrained: If True, returns a model pre-trained on our text detection dataset
         assume_straight_pages: If True, fit straight boxes to the page
+        preserve_aspect_ratio: If True, pad the input document image to preserve the aspect ratio before
+            running the detection model on it
+        symmetric_pad: if True, pad the image symmetrically instead of padding at the bottom-right
+        batch_size: number of samples the model processes in parallel
         **kwargs: optional keyword arguments passed to the architecture
 
     Returns:
-    -------
         Detection predictor
     """
-    return _predictor(arch, pretrained, assume_straight_pages, **kwargs)
+    return _predictor(
+        arch=arch,
+        pretrained=pretrained,
+        assume_straight_pages=assume_straight_pages,
+        preserve_aspect_ratio=preserve_aspect_ratio,
+        symmetric_pad=symmetric_pad,
+        batch_size=batch_size,
+        **kwargs,
+    )

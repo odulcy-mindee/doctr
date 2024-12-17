@@ -3,8 +3,9 @@
 # This program is licensed under the Apache License 2.0.
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
+from collections.abc import Callable
 from copy import deepcopy
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 import tensorflow as tf
 from tensorflow.keras import layers
@@ -13,46 +14,46 @@ from tensorflow.keras.models import Sequential
 
 from doctr.datasets import VOCABS
 
-from ...utils import conv_sequence, load_pretrained_params
+from ...utils import _build_model, conv_sequence, load_pretrained_params
 
 __all__ = ["ResNet", "resnet18", "resnet31", "resnet34", "resnet50", "resnet34_wide"]
 
 
-default_cfgs: Dict[str, Dict[str, Any]] = {
+default_cfgs: dict[str, dict[str, Any]] = {
     "resnet18": {
         "mean": (0.694, 0.695, 0.693),
         "std": (0.299, 0.296, 0.301),
         "input_shape": (32, 32, 3),
         "classes": list(VOCABS["french"]),
-        "url": "https://doctr-static.mindee.com/models?id=v0.4.1/resnet18-d4634669.zip&src=0",
+        "url": "https://doctr-static.mindee.com/models?id=v0.9.0/resnet18-f42d3854.weights.h5&src=0",
     },
     "resnet31": {
         "mean": (0.694, 0.695, 0.693),
         "std": (0.299, 0.296, 0.301),
         "input_shape": (32, 32, 3),
         "classes": list(VOCABS["french"]),
-        "url": "https://doctr-static.mindee.com/models?id=v0.5.0/resnet31-5a47a60b.zip&src=0",
+        "url": "https://doctr-static.mindee.com/models?id=v0.9.0/resnet31-ab75f78c.weights.h5&src=0",
     },
     "resnet34": {
         "mean": (0.694, 0.695, 0.693),
         "std": (0.299, 0.296, 0.301),
         "input_shape": (32, 32, 3),
         "classes": list(VOCABS["french"]),
-        "url": "https://doctr-static.mindee.com/models?id=v0.5.0/resnet34-5dcc97ca.zip&src=0",
+        "url": "https://doctr-static.mindee.com/models?id=v0.9.0/resnet34-03967df9.weights.h5&src=0",
     },
     "resnet50": {
         "mean": (0.694, 0.695, 0.693),
         "std": (0.299, 0.296, 0.301),
         "input_shape": (32, 32, 3),
         "classes": list(VOCABS["french"]),
-        "url": "https://doctr-static.mindee.com/models?id=v0.5.0/resnet50-e75e4cdf.zip&src=0",
+        "url": "https://doctr-static.mindee.com/models?id=v0.9.0/resnet50-82358f34.weights.h5&src=0",
     },
     "resnet34_wide": {
         "mean": (0.694, 0.695, 0.693),
         "std": (0.299, 0.296, 0.301),
         "input_shape": (32, 32, 3),
         "classes": list(VOCABS["french"]),
-        "url": "https://doctr-static.mindee.com/models?id=v0.5.0/resnet34_wide-c1271816.zip&src=0",
+        "url": "https://doctr-static.mindee.com/models?id=v0.9.0/resnet34_wide-b18fdf79.weights.h5&src=0",
     },
 }
 
@@ -61,7 +62,6 @@ class ResnetBlock(layers.Layer):
     """Implements a resnet31 block with shortcut
 
     Args:
-    ----
         conv_shortcut: Use of shortcut
         output_channels: number of channels to use in Conv2D
         kernel_size: size of square kernels
@@ -92,7 +92,7 @@ class ResnetBlock(layers.Layer):
         output_channels: int,
         kernel_size: int,
         strides: int = 1,
-    ) -> List[layers.Layer]:
+    ) -> list[layers.Layer]:
         return [
             *conv_sequence(output_channels, "relu", bn=True, strides=strides, kernel_size=kernel_size),
             *conv_sequence(output_channels, None, bn=True, kernel_size=kernel_size),
@@ -108,8 +108,8 @@ class ResnetBlock(layers.Layer):
 
 def resnet_stage(
     num_blocks: int, out_channels: int, shortcut: bool = False, downsample: bool = False
-) -> List[layers.Layer]:
-    _layers: List[layers.Layer] = [ResnetBlock(out_channels, conv_shortcut=shortcut, strides=2 if downsample else 1)]
+) -> list[layers.Layer]:
+    _layers: list[layers.Layer] = [ResnetBlock(out_channels, conv_shortcut=shortcut, strides=2 if downsample else 1)]
 
     for _ in range(1, num_blocks):
         _layers.append(ResnetBlock(out_channels, conv_shortcut=False))
@@ -121,7 +121,6 @@ class ResNet(Sequential):
     """Implements a ResNet architecture
 
     Args:
-    ----
         num_blocks: number of resnet block in each stage
         output_channels: number of channels in each stage
         stage_downsample: whether the first residual block of a stage should downsample
@@ -137,18 +136,18 @@ class ResNet(Sequential):
 
     def __init__(
         self,
-        num_blocks: List[int],
-        output_channels: List[int],
-        stage_downsample: List[bool],
-        stage_conv: List[bool],
-        stage_pooling: List[Optional[Tuple[int, int]]],
+        num_blocks: list[int],
+        output_channels: list[int],
+        stage_downsample: list[bool],
+        stage_conv: list[bool],
+        stage_pooling: list[tuple[int, int] | None],
         origin_stem: bool = True,
         stem_channels: int = 64,
-        attn_module: Optional[Callable[[int], layers.Layer]] = None,
+        attn_module: Callable[[int], layers.Layer] | None = None,
         include_top: bool = True,
         num_classes: int = 1000,
-        cfg: Optional[Dict[str, Any]] = None,
-        input_shape: Optional[Tuple[int, int, int]] = None,
+        cfg: dict[str, Any] | None = None,
+        input_shape: tuple[int, int, int] | None = None,
     ) -> None:
         inplanes = stem_channels
         if origin_stem:
@@ -188,11 +187,11 @@ class ResNet(Sequential):
 def _resnet(
     arch: str,
     pretrained: bool,
-    num_blocks: List[int],
-    output_channels: List[int],
-    stage_downsample: List[bool],
-    stage_conv: List[bool],
-    stage_pooling: List[Optional[Tuple[int, int]]],
+    num_blocks: list[int],
+    output_channels: list[int],
+    stage_downsample: list[bool],
+    stage_conv: list[bool],
+    stage_pooling: list[tuple[int, int] | None],
     origin_stem: bool = True,
     **kwargs: Any,
 ) -> ResNet:
@@ -210,9 +209,15 @@ def _resnet(
     model = ResNet(
         num_blocks, output_channels, stage_downsample, stage_conv, stage_pooling, origin_stem, cfg=_cfg, **kwargs
     )
+    _build_model(model)
+
     # Load pretrained parameters
     if pretrained:
-        load_pretrained_params(model, default_cfgs[arch]["url"])
+        # The number of classes is not the same as the number of classes in the pretrained model =>
+        # skip the mismatching layers for fine tuning
+        load_pretrained_params(
+            model, default_cfgs[arch]["url"], skip_mismatch=kwargs["num_classes"] != len(default_cfgs[arch]["classes"])
+        )
 
     return model
 
@@ -228,12 +233,10 @@ def resnet18(pretrained: bool = False, **kwargs: Any) -> ResNet:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained: boolean, True if model is pretrained
         **kwargs: keyword arguments of the ResNet architecture
 
     Returns:
-    -------
         A classification model
     """
     return _resnet(
@@ -261,12 +264,10 @@ def resnet31(pretrained: bool = False, **kwargs: Any) -> ResNet:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained: boolean, True if model is pretrained
         **kwargs: keyword arguments of the ResNet architecture
 
     Returns:
-    -------
         A classification model
     """
     return _resnet(
@@ -294,12 +295,10 @@ def resnet34(pretrained: bool = False, **kwargs: Any) -> ResNet:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained: boolean, True if model is pretrained
         **kwargs: keyword arguments of the ResNet architecture
 
     Returns:
-    -------
         A classification model
     """
     return _resnet(
@@ -326,12 +325,10 @@ def resnet50(pretrained: bool = False, **kwargs: Any) -> ResNet:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained: boolean, True if model is pretrained
         **kwargs: keyword arguments of the ResNet architecture
 
     Returns:
-    -------
         A classification model
     """
     kwargs["num_classes"] = kwargs.get("num_classes", len(default_cfgs["resnet50"]["classes"]))
@@ -354,10 +351,17 @@ def resnet50(pretrained: bool = False, **kwargs: Any) -> ResNet:
     )
 
     model.cfg = _cfg
+    _build_model(model)
 
     # Load pretrained parameters
     if pretrained:
-        load_pretrained_params(model, default_cfgs["resnet50"]["url"])
+        # The number of classes is not the same as the number of classes in the pretrained model =>
+        # skip the mismatching layers for fine tuning
+        load_pretrained_params(
+            model,
+            default_cfgs["resnet50"]["url"],
+            skip_mismatch=kwargs["num_classes"] != len(default_cfgs["resnet50"]["classes"]),
+        )
 
     return model
 
@@ -373,12 +377,10 @@ def resnet34_wide(pretrained: bool = False, **kwargs: Any) -> ResNet:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained: boolean, True if model is pretrained
         **kwargs: keyword arguments of the ResNet architecture
 
     Returns:
-    -------
         A classification model
     """
     return _resnet(

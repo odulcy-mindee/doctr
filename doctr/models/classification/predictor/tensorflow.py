@@ -3,11 +3,10 @@
 # This program is licensed under the Apache License 2.0.
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
-from typing import List, Union
 
 import numpy as np
 import tensorflow as tf
-from tensorflow import keras
+from tensorflow.keras import Model
 
 from doctr.models.preprocessor import PreProcessor
 from doctr.utils.repr import NestedObject
@@ -20,28 +19,31 @@ class OrientationPredictor(NestedObject):
     4 possible orientations: 0, 90, 180, 270 (-90) degrees counter clockwise.
 
     Args:
-    ----
         pre_processor: transform inputs for easier batched model inference
         model: core classification architecture (backbone + classification head)
     """
 
-    _children_names: List[str] = ["pre_processor", "model"]
+    _children_names: list[str] = ["pre_processor", "model"]
 
     def __init__(
         self,
-        pre_processor: PreProcessor,
-        model: keras.Model,
+        pre_processor: PreProcessor | None,
+        model: Model | None,
     ) -> None:
-        self.pre_processor = pre_processor
-        self.model = model
+        self.pre_processor = pre_processor if isinstance(pre_processor, PreProcessor) else None
+        self.model = model if isinstance(model, Model) else None
 
     def __call__(
         self,
-        inputs: List[Union[np.ndarray, tf.Tensor]],
-    ) -> List[Union[List[int], List[float]]]:
+        inputs: list[np.ndarray | tf.Tensor],
+    ) -> list[list[int] | list[float]]:
         # Dimension check
         if any(input.ndim != 3 for input in inputs):
             raise ValueError("incorrect input shape: all inputs are expected to be multi-channel 2D images.")
+
+        if self.model is None or self.pre_processor is None:
+            # predictor is disabled
+            return [[0] * len(inputs), [0] * len(inputs), [1.0] * len(inputs)]
 
         processed_batches = self.pre_processor(inputs)
         predicted_batches = [self.model(batch, training=False) for batch in processed_batches]

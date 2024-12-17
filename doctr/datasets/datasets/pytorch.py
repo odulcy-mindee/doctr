@@ -5,7 +5,7 @@
 
 import os
 from copy import deepcopy
-from typing import Any, List, Tuple
+from typing import Any
 
 import numpy as np
 import torch
@@ -20,7 +20,7 @@ __all__ = ["AbstractDataset", "VisionDataset"]
 class AbstractDataset(_AbstractDataset):
     """Abstract class for all datasets"""
 
-    def _read_sample(self, index: int) -> Tuple[torch.Tensor, Any]:
+    def _read_sample(self, index: int) -> tuple[torch.Tensor, Any]:
         img_name, target = self.data[index]
 
         # Check target
@@ -29,14 +29,14 @@ class AbstractDataset(_AbstractDataset):
             assert "labels" in target, "Target should contain 'labels' key"
         elif isinstance(target, tuple):
             assert len(target) == 2
-            assert isinstance(target[0], str) or isinstance(
-                target[0], np.ndarray
-            ), "first element of the tuple should be a string or a numpy array"
+            assert isinstance(target[0], str) or isinstance(target[0], np.ndarray), (
+                "first element of the tuple should be a string or a numpy array"
+            )
             assert isinstance(target[1], list), "second element of the tuple should be a list"
         else:
-            assert isinstance(target, str) or isinstance(
-                target, np.ndarray
-            ), "Target should be a string or a numpy array"
+            assert isinstance(target, str) or isinstance(target, np.ndarray), (
+                "Target should be a string or a numpy array"
+            )
 
         # Read image
         img = (
@@ -48,11 +48,11 @@ class AbstractDataset(_AbstractDataset):
         return img, deepcopy(target)
 
     @staticmethod
-    def collate_fn(samples: List[Tuple[torch.Tensor, Any]]) -> Tuple[torch.Tensor, List[Any]]:
+    def collate_fn(samples: list[tuple[torch.Tensor, Any]]) -> tuple[torch.Tensor, list[Any]]:
         images, targets = zip(*samples)
-        images = torch.stack(images, dim=0)  # type: ignore[assignment]
+        images = torch.stack(images, dim=0)
 
-        return images, list(targets)  # type: ignore[return-value]
+        return images, list(targets)
 
 
 class VisionDataset(AbstractDataset, _VisionDataset):  # noqa: D101

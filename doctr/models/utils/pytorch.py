@@ -4,7 +4,7 @@
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
 import logging
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any
 
 import torch
 from torch import nn
@@ -18,7 +18,11 @@ __all__ = [
     "export_model_to_onnx",
     "_copy_tensor",
     "_bf16_to_float32",
+    "_CompiledModule",
 ]
+
+# torch compiled model type
+_CompiledModule = torch._dynamo.eval_frame.OptimizedModule
 
 
 def _copy_tensor(x: torch.Tensor) -> torch.Tensor:
@@ -32,9 +36,9 @@ def _bf16_to_float32(x: torch.Tensor) -> torch.Tensor:
 
 def load_pretrained_params(
     model: nn.Module,
-    url: Optional[str] = None,
-    hash_prefix: Optional[str] = None,
-    ignore_keys: Optional[List[str]] = None,
+    url: str | None = None,
+    hash_prefix: str | None = None,
+    ignore_keys: list[str] | None = None,
     **kwargs: Any,
 ) -> None:
     """Load a set of parameters onto a model
@@ -43,7 +47,6 @@ def load_pretrained_params(
     >>> load_pretrained_params(model, "https://yoursource.com/yourcheckpoint-yourhash.zip")
 
     Args:
-    ----
         model: the PyTorch model to be loaded
         url: URL of the zipped set of parameters
         hash_prefix: first characters of SHA256 expected hash
@@ -76,7 +79,7 @@ def conv_sequence_pt(
     relu: bool = False,
     bn: bool = False,
     **kwargs: Any,
-) -> List[nn.Module]:
+) -> list[nn.Module]:
     """Builds a convolutional-based layer sequence
 
     >>> from torch.nn import Sequential
@@ -84,7 +87,6 @@ def conv_sequence_pt(
     >>> module = Sequential(conv_sequence(3, 32, True, True, kernel_size=3))
 
     Args:
-    ----
         in_channels: number of input channels
         out_channels: number of output channels
         relu: whether ReLU should be used
@@ -92,13 +94,12 @@ def conv_sequence_pt(
         **kwargs: additional arguments to be passed to the convolutional layer
 
     Returns:
-    -------
         list of layers
     """
     # No bias before Batch norm
     kwargs["bias"] = kwargs.get("bias", not bn)
     # Add activation directly to the conv if there is no BN
-    conv_seq: List[nn.Module] = [nn.Conv2d(in_channels, out_channels, **kwargs)]
+    conv_seq: list[nn.Module] = [nn.Conv2d(in_channels, out_channels, **kwargs)]
 
     if bn:
         conv_seq.append(nn.BatchNorm2d(out_channels))
@@ -110,8 +111,8 @@ def conv_sequence_pt(
 
 
 def set_device_and_dtype(
-    model: Any, batches: List[torch.Tensor], device: Union[str, torch.device], dtype: torch.dtype
-) -> Tuple[Any, List[torch.Tensor]]:
+    model: Any, batches: list[torch.Tensor], device: str | torch.device, dtype: torch.dtype
+) -> tuple[Any, list[torch.Tensor]]:
     """Set the device and dtype of a model and its batches
 
     >>> import torch
@@ -122,14 +123,12 @@ def set_device_and_dtype(
     >>> model, batches = set_device_and_dtype(model, batches, device="cuda", dtype=torch.float16)
 
     Args:
-    ----
         model: the model to be set
         batches: the batches to be set
         device: the device to be used
         dtype: the dtype to be used
 
     Returns:
-    -------
         the model and batches set
     """
     return model.to(device=device, dtype=dtype), [batch.to(device=device, dtype=dtype) for batch in batches]
@@ -145,14 +144,12 @@ def export_model_to_onnx(model: nn.Module, model_name: str, dummy_input: torch.T
     >>> export_model_to_onnx(model, "my_model", dummy_input=torch.randn(1, 3, 32, 32))
 
     Args:
-    ----
         model: the PyTorch model to be exported
         model_name: the name for the exported model
         dummy_input: the dummy input to the model
         kwargs: additional arguments to be passed to torch.onnx.export
 
     Returns:
-    -------
         the path to the exported model
     """
     torch.onnx.export(

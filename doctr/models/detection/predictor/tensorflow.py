@@ -3,11 +3,11 @@
 # This program is licensed under the Apache License 2.0.
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any
 
 import numpy as np
 import tensorflow as tf
-from tensorflow import keras
+from tensorflow.keras import Model
 
 from doctr.models.detection._utils import _remove_padding
 from doctr.models.preprocessor import PreProcessor
@@ -20,27 +20,26 @@ class DetectionPredictor(NestedObject):
     """Implements an object able to localize text elements in a document
 
     Args:
-    ----
         pre_processor: transform inputs for easier batched model inference
         model: core detection architecture
     """
 
-    _children_names: List[str] = ["pre_processor", "model"]
+    _children_names: list[str] = ["pre_processor", "model"]
 
     def __init__(
         self,
         pre_processor: PreProcessor,
-        model: keras.Model,
+        model: Model,
     ) -> None:
         self.pre_processor = pre_processor
         self.model = model
 
     def __call__(
         self,
-        pages: List[Union[np.ndarray, tf.Tensor]],
+        pages: list[np.ndarray | tf.Tensor],
         return_maps: bool = False,
         **kwargs: Any,
-    ) -> Union[List[Dict[str, np.ndarray]], Tuple[List[Dict[str, np.ndarray]], List[np.ndarray]]]:
+    ) -> list[dict[str, np.ndarray]] | tuple[list[dict[str, np.ndarray]], list[np.ndarray]]:
         # Extract parameters from the preprocessor
         preserve_aspect_ratio = self.pre_processor.resize.preserve_aspect_ratio
         symmetric_pad = self.pre_processor.resize.symmetric_pad

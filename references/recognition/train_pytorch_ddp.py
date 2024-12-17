@@ -106,8 +106,8 @@ def evaluate(model, device, val_loader, batch_transforms, val_metric, amp=False)
 
 
 def main(rank: int, world_size: int, args):
-    """Args:
-    ----
+    """
+    Args:
         rank (int): device id to put the model on
         world_size (int): number of processes participating in the job
         args: other arguments passed through the CLI
@@ -162,9 +162,7 @@ def main(rank: int, world_size: int, args):
             pin_memory=torch.cuda.is_available(),
             collate_fn=val_set.collate_fn,
         )
-        print(
-            f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in " f"{len(val_loader)} batches)"
-        )
+        print(f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in {len(val_loader)} batches)")
 
     batch_transforms = Normalize(mean=(0.694, 0.695, 0.693), std=(0.299, 0.296, 0.301))
 
@@ -266,7 +264,7 @@ def main(rank: int, world_size: int, args):
         pin_memory=torch.cuda.is_available(),
         collate_fn=train_set.collate_fn,
     )
-    print(f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in " f"{len(train_loader)} batches)")
+    print(f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in {len(train_loader)} batches)")
 
     if rank == 0 and args.show_samples:
         x, target = next(iter(train_loader))
@@ -359,9 +357,12 @@ def parse_args():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="DocTR training script for text recognition (PyTorch)",
+        description="DocTR DDP training script for text recognition (PyTorch)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+
+    # DDP related args
+    parser.add_argument("--backend", default="nccl", type=str, help="Backend to use for Torch DDP")
 
     parser.add_argument("arch", type=str, help="text-recognition model to train")
     parser.add_argument("--train_path", type=str, default=None, help="path to train data folder(s)")
@@ -386,7 +387,6 @@ def parse_args():
     parser.add_argument("--name", type=str, default=None, help="Name of your training experiment")
     parser.add_argument("--epochs", type=int, default=10, help="number of epochs to train the model on")
     parser.add_argument("-b", "--batch_size", type=int, default=64, help="batch size for training")
-    parser.add_argument("--backend", default="nccl", type=str, help="Backend to use for Torch DDP")
     parser.add_argument("--devices", default=None, nargs="+", type=int, help="GPU devices to use for training")
     parser.add_argument("--input_size", type=int, default=32, help="input size H for the model, W = 4*H")
     parser.add_argument("--lr", type=float, default=0.001, help="learning rate for the optimizer (Adam)")

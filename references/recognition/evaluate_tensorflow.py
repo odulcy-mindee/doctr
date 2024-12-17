@@ -5,6 +5,10 @@
 
 import os
 
+from doctr.file_utils import ensure_keras_v2
+
+ensure_keras_v2()
+
 os.environ["USE_TF"] = "1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
@@ -14,7 +18,7 @@ import tensorflow as tf
 from tensorflow.keras import mixed_precision
 from tqdm import tqdm
 
-gpu_devices = tf.config.experimental.list_physical_devices("GPU")
+gpu_devices = tf.config.list_physical_devices("GPU")
 if any(gpu_devices):
     tf.config.experimental.set_memory_growth(gpu_devices[0], True)
 
@@ -34,7 +38,7 @@ def evaluate(model, val_loader, batch_transforms, val_metric):
     for images, targets in tqdm(val_iter):
         try:
             images = batch_transforms(images)
-            out = model(images, targets, return_preds=True, training=False)
+            out = model(images, target=targets, return_preds=True, training=False)
             # Compute metric
             if len(out["preds"]):
                 words, _ = zip(*out["preds"])
@@ -95,7 +99,7 @@ def main(args):
         drop_last=False,
         shuffle=False,
     )
-    print(f"Test set loaded in {time.time() - st:.4}s ({len(ds)} samples in " f"{len(test_loader)} batches)")
+    print(f"Test set loaded in {time.time() - st:.4}s ({len(ds)} samples in {len(test_loader)} batches)")
 
     mean, std = model.cfg["mean"], model.cfg["std"]
     batch_transforms = T.Normalize(mean=mean, std=std)

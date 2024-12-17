@@ -5,7 +5,8 @@
 
 import math
 import random
-from typing import Any, Callable, List, Optional, Tuple, Union
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 
@@ -21,16 +22,6 @@ class SampleCompose(NestedObject):
 
     .. tabs::
 
-        .. tab:: TensorFlow
-
-            .. code:: python
-
-                >>> import numpy as np
-                >>> import tensorflow as tf
-                >>> from doctr.transforms import SampleCompose, ImageTransform, ColorInversion, RandomRotate
-                >>> transfo = SampleCompose([ImageTransform(ColorInversion((32, 32))), RandomRotate(30)])
-                >>> out, out_boxes = transfo(tf.random.uniform(shape=[64, 64, 3], minval=0, maxval=1), np.zeros((2, 4)))
-
         .. tab:: PyTorch
 
             .. code:: python
@@ -41,17 +32,26 @@ class SampleCompose(NestedObject):
                 >>> transfos = SampleCompose([ImageTransform(ColorInversion((32, 32))), RandomRotate(30)])
                 >>> out, out_boxes = transfos(torch.rand(8, 64, 64, 3), np.zeros((2, 4)))
 
+        .. tab:: TensorFlow
+
+            .. code:: python
+
+                >>> import numpy as np
+                >>> import tensorflow as tf
+                >>> from doctr.transforms import SampleCompose, ImageTransform, ColorInversion, RandomRotate
+                >>> transfo = SampleCompose([ImageTransform(ColorInversion((32, 32))), RandomRotate(30)])
+                >>> out, out_boxes = transfo(tf.random.uniform(shape=[64, 64, 3], minval=0, maxval=1), np.zeros((2, 4)))
+
     Args:
-    ----
         transforms: list of transformation modules
     """
 
-    _children_names: List[str] = ["sample_transforms"]
+    _children_names: list[str] = ["sample_transforms"]
 
-    def __init__(self, transforms: List[Callable[[Any, Any], Tuple[Any, Any]]]) -> None:
+    def __init__(self, transforms: list[Callable[[Any, Any], tuple[Any, Any]]]) -> None:
         self.sample_transforms = transforms
 
-    def __call__(self, x: Any, target: Any) -> Tuple[Any, Any]:
+    def __call__(self, x: Any, target: Any) -> tuple[Any, Any]:
         for t in self.sample_transforms:
             x, target = t(x, target)
 
@@ -63,15 +63,6 @@ class ImageTransform(NestedObject):
 
     .. tabs::
 
-        .. tab:: TensorFlow
-
-            .. code:: python
-
-                >>> import tensorflow as tf
-                >>> from doctr.transforms import ImageTransform, ColorInversion
-                >>> transfo = ImageTransform(ColorInversion((32, 32)))
-                >>> out, _ = transfo(tf.random.uniform(shape=[64, 64, 3], minval=0, maxval=1), None)
-
         .. tab:: PyTorch
 
             .. code:: python
@@ -81,17 +72,25 @@ class ImageTransform(NestedObject):
                 >>> transfo = ImageTransform(ColorInversion((32, 32)))
                 >>> out, _ = transfo(torch.rand(8, 64, 64, 3), None)
 
+        .. tab:: TensorFlow
+
+            .. code:: python
+
+                >>> import tensorflow as tf
+                >>> from doctr.transforms import ImageTransform, ColorInversion
+                >>> transfo = ImageTransform(ColorInversion((32, 32)))
+                >>> out, _ = transfo(tf.random.uniform(shape=[64, 64, 3], minval=0, maxval=1), None)
+
     Args:
-    ----
         transform: the image transformation module to wrap
     """
 
-    _children_names: List[str] = ["img_transform"]
+    _children_names: list[str] = ["img_transform"]
 
     def __init__(self, transform: Callable[[Any], Any]) -> None:
         self.img_transform = transform
 
-    def __call__(self, img: Any, target: Any) -> Tuple[Any, Any]:
+    def __call__(self, img: Any, target: Any) -> tuple[Any, Any]:
         img = self.img_transform(img)
         return img, target
 
@@ -102,15 +101,6 @@ class ColorInversion(NestedObject):
 
     .. tabs::
 
-        .. tab:: TensorFlow
-
-            .. code:: python
-
-                >>> import tensorflow as tf
-                >>> from doctr.transforms import ColorInversion
-                >>> transfo = ColorInversion(min_val=0.6)
-                >>> out = transfo(tf.random.uniform(shape=[8, 64, 64, 3], minval=0, maxval=1))
-
         .. tab:: PyTorch
 
             .. code:: python
@@ -120,8 +110,16 @@ class ColorInversion(NestedObject):
                 >>> transfo = ColorInversion(min_val=0.6)
                 >>> out = transfo(torch.rand(8, 64, 64, 3))
 
+        .. tab:: TensorFlow
+
+            .. code:: python
+
+                >>> import tensorflow as tf
+                >>> from doctr.transforms import ColorInversion
+                >>> transfo = ColorInversion(min_val=0.6)
+                >>> out = transfo(tf.random.uniform(shape=[8, 64, 64, 3], minval=0, maxval=1))
+
     Args:
-    ----
         min_val: range [min_val, 1] to colorize RGB pixels
     """
 
@@ -140,15 +138,6 @@ class OneOf(NestedObject):
 
     .. tabs::
 
-        .. tab:: TensorFlow
-
-            .. code:: python
-
-                >>> import tensorflow as tf
-                >>> from doctr.transforms import OneOf
-                >>> transfo = OneOf([JpegQuality(), Gamma()])
-                >>> out = transfo(tf.random.uniform(shape=[64, 64, 3], minval=0, maxval=1))
-
         .. tab:: PyTorch
 
             .. code:: python
@@ -158,17 +147,25 @@ class OneOf(NestedObject):
                 >>> transfo = OneOf([JpegQuality(), Gamma()])
                 >>> out = transfo(torch.rand(1, 64, 64, 3))
 
+        .. tab:: TensorFlow
+
+            .. code:: python
+
+                >>> import tensorflow as tf
+                >>> from doctr.transforms import OneOf
+                >>> transfo = OneOf([JpegQuality(), Gamma()])
+                >>> out = transfo(tf.random.uniform(shape=[64, 64, 3], minval=0, maxval=1))
+
     Args:
-    ----
         transforms: list of transformations, one only will be picked
     """
 
-    _children_names: List[str] = ["transforms"]
+    _children_names: list[str] = ["transforms"]
 
-    def __init__(self, transforms: List[Callable[[Any], Any]]) -> None:
+    def __init__(self, transforms: list[Callable[[Any], Any]]) -> None:
         self.transforms = transforms
 
-    def __call__(self, img: Any, target: Optional[np.ndarray] = None) -> Union[Any, Tuple[Any, np.ndarray]]:
+    def __call__(self, img: Any, target: np.ndarray | None = None) -> Any | tuple[Any, np.ndarray]:
         # Pick transformation
         transfo = self.transforms[int(random.random() * len(self.transforms))]
         # Apply
@@ -180,15 +177,6 @@ class RandomApply(NestedObject):
 
     .. tabs::
 
-        .. tab:: TensorFlow
-
-            .. code:: python
-
-                >>> import tensorflow as tf
-                >>> from doctr.transforms import RandomApply
-                >>> transfo = RandomApply(Gamma(), p=.5)
-                >>> out = transfo(tf.random.uniform(shape=[64, 64, 3], minval=0, maxval=1))
-
         .. tab:: PyTorch
 
             .. code:: python
@@ -198,8 +186,16 @@ class RandomApply(NestedObject):
                 >>> transfo = RandomApply(Gamma(), p=.5)
                 >>> out = transfo(torch.rand(1, 64, 64, 3))
 
+        .. tab:: TensorFlow
+
+            .. code:: python
+
+                >>> import tensorflow as tf
+                >>> from doctr.transforms import RandomApply
+                >>> transfo = RandomApply(Gamma(), p=.5)
+                >>> out = transfo(tf.random.uniform(shape=[64, 64, 3], minval=0, maxval=1))
+
     Args:
-    ----
         transform: transformation to apply
         p: probability to apply
     """
@@ -211,7 +207,7 @@ class RandomApply(NestedObject):
     def extra_repr(self) -> str:
         return f"transform={self.transform}, p={self.p}"
 
-    def __call__(self, img: Any, target: Optional[np.ndarray] = None) -> Union[Any, Tuple[Any, np.ndarray]]:
+    def __call__(self, img: Any, target: np.ndarray | None = None) -> Any | tuple[Any, np.ndarray]:
         if random.random() < self.p:
             return self.transform(img) if target is None else self.transform(img, target)  # type: ignore[call-arg]
         return img if target is None else (img, target)
@@ -224,9 +220,7 @@ class RandomRotate(NestedObject):
         :align: center
 
     Args:
-    ----
-        max_angle: maximum angle for rotation, in degrees. Angles will be uniformly picked in
-            [-max_angle, max_angle]
+        max_angle: maximum angle for rotation, in degrees. Angles will be uniformly picked in [-max_angle, max_angle]
         expand: whether the image should be padded before the rotation
     """
 
@@ -237,7 +231,7 @@ class RandomRotate(NestedObject):
     def extra_repr(self) -> str:
         return f"max_angle={self.max_angle}, expand={self.expand}"
 
-    def __call__(self, img: Any, target: np.ndarray) -> Tuple[Any, np.ndarray]:
+    def __call__(self, img: Any, target: np.ndarray) -> tuple[Any, np.ndarray]:
         angle = random.uniform(-self.max_angle, self.max_angle)
         r_img, r_polys = F.rotate_sample(img, target, angle, self.expand)
         # Removes deleted boxes
@@ -249,19 +243,18 @@ class RandomCrop(NestedObject):
     """Randomly crop a tensor image and its boxes
 
     Args:
-    ----
         scale: tuple of floats, relative (min_area, max_area) of the crop
         ratio: tuple of float, relative (min_ratio, max_ratio) where ratio = h/w
     """
 
-    def __init__(self, scale: Tuple[float, float] = (0.08, 1.0), ratio: Tuple[float, float] = (0.75, 1.33)) -> None:
+    def __init__(self, scale: tuple[float, float] = (0.08, 1.0), ratio: tuple[float, float] = (0.75, 1.33)) -> None:
         self.scale = scale
         self.ratio = ratio
 
     def extra_repr(self) -> str:
         return f"scale={self.scale}, ratio={self.ratio}"
 
-    def __call__(self, img: Any, target: np.ndarray) -> Tuple[Any, np.ndarray]:
+    def __call__(self, img: Any, target: np.ndarray) -> tuple[Any, np.ndarray]:
         scale = random.uniform(self.scale[0], self.scale[1])
         ratio = random.uniform(self.ratio[0], self.ratio[1])
 

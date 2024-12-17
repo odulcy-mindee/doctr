@@ -4,7 +4,7 @@
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import tensorflow as tf
 from tensorflow.keras import Model, layers
@@ -12,25 +12,25 @@ from tensorflow.keras import Model, layers
 from doctr.datasets import VOCABS
 
 from ...classification import vit_b, vit_s
-from ...utils.tensorflow import _bf16_to_float32, load_pretrained_params
+from ...utils.tensorflow import _bf16_to_float32, _build_model, load_pretrained_params
 from .base import _ViTSTR, _ViTSTRPostProcessor
 
 __all__ = ["ViTSTR", "vitstr_small", "vitstr_base"]
 
-default_cfgs: Dict[str, Dict[str, Any]] = {
+default_cfgs: dict[str, dict[str, Any]] = {
     "vitstr_small": {
         "mean": (0.694, 0.695, 0.693),
         "std": (0.299, 0.296, 0.301),
         "input_shape": (32, 128, 3),
         "vocab": VOCABS["french"],
-        "url": "https://doctr-static.mindee.com/models?id=v0.6.0/vitstr_small-358fab2e.zip&src=0",
+        "url": "https://doctr-static.mindee.com/models?id=v0.9.0/vitstr_small-d28b8d92.weights.h5&src=0",
     },
     "vitstr_base": {
         "mean": (0.694, 0.695, 0.693),
         "std": (0.299, 0.296, 0.301),
         "input_shape": (32, 128, 3),
         "vocab": VOCABS["french"],
-        "url": "https://doctr-static.mindee.com/models?id=v0.6.0/vitstr_base-2889159a.zip&src=0",
+        "url": "https://doctr-static.mindee.com/models?id=v0.9.0/vitstr_base-9ad6eb84.weights.h5&src=0",
     },
 }
 
@@ -40,7 +40,6 @@ class ViTSTR(_ViTSTR, Model):
     Efficient Scene Text Recognition" <https://arxiv.org/pdf/2105.08582.pdf>`_.
 
     Args:
-    ----
         feature_extractor: the backbone serving as feature extractor
         vocab: vocabulary used for encoding
         embedding_units: number of embedding units
@@ -51,7 +50,7 @@ class ViTSTR(_ViTSTR, Model):
         cfg: dictionary containing information about the model
     """
 
-    _children_names: List[str] = ["feat_extractor", "postprocessor"]
+    _children_names: list[str] = ["feat_extractor", "postprocessor"]
 
     def __init__(
         self,
@@ -60,9 +59,9 @@ class ViTSTR(_ViTSTR, Model):
         embedding_units: int,
         max_length: int = 32,
         dropout_prob: float = 0.0,
-        input_shape: Tuple[int, int, int] = (32, 128, 3),  # different from paper
+        input_shape: tuple[int, int, int] = (32, 128, 3),  # different from paper
         exportable: bool = False,
-        cfg: Optional[Dict[str, Any]] = None,
+        cfg: dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
         self.vocab = vocab
@@ -79,19 +78,17 @@ class ViTSTR(_ViTSTR, Model):
     def compute_loss(
         model_output: tf.Tensor,
         gt: tf.Tensor,
-        seq_len: List[int],
+        seq_len: list[int],
     ) -> tf.Tensor:
         """Compute categorical cross-entropy loss for the model.
         Sequences are masked after the EOS character.
 
         Args:
-        ----
             model_output: predicted logits of the model
             gt: the encoded tensor with gt labels
             seq_len: lengths of each gt word inside the batch
 
         Returns:
-        -------
             The loss of the model on the batch
         """
         # Input length : number of steps
@@ -114,11 +111,11 @@ class ViTSTR(_ViTSTR, Model):
     def call(
         self,
         x: tf.Tensor,
-        target: Optional[List[str]] = None,
+        target: list[str] | None = None,
         return_model_output: bool = False,
         return_preds: bool = False,
         **kwargs: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         features = self.feat_extractor(x, **kwargs)  # (batch_size, patches_seqlen, d_model)
 
         if target is not None:
@@ -136,7 +133,7 @@ class ViTSTR(_ViTSTR, Model):
         )  # (batch_size, max_length, vocab + 1)
         decoded_features = _bf16_to_float32(logits[:, 1:])  # remove cls_token
 
-        out: Dict[str, tf.Tensor] = {}
+        out: dict[str, tf.Tensor] = {}
         if self.exportable:
             out["logits"] = decoded_features
             return out
@@ -158,14 +155,13 @@ class ViTSTRPostProcessor(_ViTSTRPostProcessor):
     """Post processor for ViTSTR architecture
 
     Args:
-    ----
         vocab: string containing the ordered sequence of supported characters
     """
 
     def __call__(
         self,
         logits: tf.Tensor,
-    ) -> List[Tuple[str, float]]:
+    ) -> list[tuple[str, float]]:
         # compute pred with argmax for attention models
         out_idxs = tf.math.argmax(logits, axis=2)
         preds_prob = tf.math.reduce_max(tf.nn.softmax(logits, axis=-1), axis=-1)
@@ -191,7 +187,7 @@ def _vitstr(
     arch: str,
     pretrained: bool,
     backbone_fn,
-    input_shape: Optional[Tuple[int, int, int]] = None,
+    input_shape: tuple[int, int, int] | None = None,
     **kwargs: Any,
 ) -> ViTSTR:
     # Patch the config
@@ -216,9 +212,14 @@ def _vitstr(
 
     # Build the model
     model = ViTSTR(feat_extractor, cfg=_cfg, **kwargs)
+    _build_model(model)
+
     # Load pretrained parameters
     if pretrained:
-        load_pretrained_params(model, default_cfgs[arch]["url"])
+        # The given vocab differs from the pretrained model => skip the mismatching layers for fine tuning
+        load_pretrained_params(
+            model, default_cfgs[arch]["url"], skip_mismatch=kwargs["vocab"] != default_cfgs[arch]["vocab"]
+        )
 
     return model
 
@@ -234,12 +235,10 @@ def vitstr_small(pretrained: bool = False, **kwargs: Any) -> ViTSTR:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained (bool): If True, returns a model pre-trained on our text recognition dataset
         **kwargs: keyword arguments of the ViTSTR architecture
 
     Returns:
-    -------
         text recognition architecture
     """
     return _vitstr(
@@ -263,12 +262,10 @@ def vitstr_base(pretrained: bool = False, **kwargs: Any) -> ViTSTR:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained (bool): If True, returns a model pre-trained on our text recognition dataset
         **kwargs: keyword arguments of the ViTSTR architecture
 
     Returns:
-    -------
         text recognition architecture
     """
     return _vitstr(

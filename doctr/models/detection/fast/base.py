@@ -5,7 +5,6 @@
 
 # Credits: post-processing adapted from https://github.com/xuannianz/DifferentiableBinarization
 
-from typing import Dict, List, Tuple, Union
 
 import cv2
 import numpy as np
@@ -23,7 +22,6 @@ class FASTPostProcessor(DetectionPostProcessor):
     """Implements a post processor for FAST model.
 
     Args:
-    ----
         bin_thresh: threshold used to binzarized p_map at inference time
         box_thresh: minimal objectness score to consider a box
         assume_straight_pages: whether the inputs were expected to have horizontal text elements
@@ -45,11 +43,9 @@ class FASTPostProcessor(DetectionPostProcessor):
         """Expand a polygon (points) by a factor unclip_ratio, and returns a polygon
 
         Args:
-        ----
             points: The first parameter.
 
         Returns:
-        -------
             a box in absolute coordinates (xmin, ymin, xmax, ymax) or (4, 2) array (quadrangle)
         """
         if not self.assume_straight_pages:
@@ -94,24 +90,22 @@ class FASTPostProcessor(DetectionPostProcessor):
         """Compute boxes from a bitmap/pred_map: find connected components then filter boxes
 
         Args:
-        ----
             pred: Pred map from differentiable linknet output
             bitmap: Bitmap map computed from pred (binarized)
             angle_tol: Comparison tolerance of the angle with the median angle across the page
             ratio_tol: Under this limit aspect ratio, we cannot resolve the direction of the crop
 
         Returns:
-        -------
             np tensor boxes for the bitmap, each box is a 6-element list
                 containing x, y, w, h, alpha, score for the box
         """
         height, width = bitmap.shape[:2]
-        boxes: List[Union[np.ndarray, List[float]]] = []
+        boxes: list[np.ndarray | list[float]] = []
         # get contours from connected components on the bitmap
         contours, _ = cv2.findContours(bitmap.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for contour in contours:
             # Check whether smallest enclosing bounding box is not too small
-            if np.any(contour[:, 0].max(axis=0) - contour[:, 0].min(axis=0) < 2):  # type: ignore[index]
+            if np.any(contour[:, 0].max(axis=0) - contour[:, 0].min(axis=0) < 2):
                 continue
             # Compute objectness
             if self.assume_straight_pages:
@@ -158,20 +152,18 @@ class _FAST(BaseModel):
 
     def build_target(
         self,
-        target: List[Dict[str, np.ndarray]],
-        output_shape: Tuple[int, int, int],
+        target: list[dict[str, np.ndarray]],
+        output_shape: tuple[int, int, int],
         channels_last: bool = True,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Build the target, and it's mask to be used from loss computation.
 
         Args:
-        ----
             target: target coming from dataset
             output_shape: shape of the output of the model without batch_size
             channels_last: whether channels are last or not
 
         Returns:
-        -------
             the new formatted target, mask and shrunken text kernel
         """
         if any(t.dtype != np.float32 for tgt in target for t in tgt.values()):

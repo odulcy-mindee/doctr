@@ -4,7 +4,7 @@
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import tensorflow as tf
 from tensorflow.keras import Model, layers
@@ -13,19 +13,19 @@ from doctr.datasets import VOCABS
 from doctr.models.classification import magc_resnet31
 from doctr.models.modules.transformer import Decoder, PositionalEncoding
 
-from ...utils.tensorflow import _bf16_to_float32, load_pretrained_params
+from ...utils.tensorflow import _bf16_to_float32, _build_model, load_pretrained_params
 from .base import _MASTER, _MASTERPostProcessor
 
 __all__ = ["MASTER", "master"]
 
 
-default_cfgs: Dict[str, Dict[str, Any]] = {
+default_cfgs: dict[str, dict[str, Any]] = {
     "master": {
         "mean": (0.694, 0.695, 0.693),
         "std": (0.299, 0.296, 0.301),
         "input_shape": (32, 128, 3),
         "vocab": VOCABS["french"],
-        "url": "https://doctr-static.mindee.com/models?id=v0.6.0/master-a8232e9f.zip&src=0",
+        "url": "https://doctr-static.mindee.com/models?id=v0.9.0/master-d7fdaeff.weights.h5&src=0",
     },
 }
 
@@ -35,7 +35,6 @@ class MASTER(_MASTER, Model):
     Implementation based on the official TF implementation: <https://github.com/jiangxiluning/MASTER-TF>`_.
 
     Args:
-    ----
         feature_extractor: the backbone serving as feature extractor
         vocab: vocabulary, (without EOS, SOS, PAD)
         d_model: d parameter for the transformer decoder
@@ -51,7 +50,7 @@ class MASTER(_MASTER, Model):
 
     def __init__(
         self,
-        feature_extractor: tf.keras.Model,
+        feature_extractor: Model,
         vocab: str,
         d_model: int = 512,
         dff: int = 2048,
@@ -59,9 +58,9 @@ class MASTER(_MASTER, Model):
         num_layers: int = 3,
         max_length: int = 50,
         dropout: float = 0.2,
-        input_shape: Tuple[int, int, int] = (32, 128, 3),  # different from the paper
+        input_shape: tuple[int, int, int] = (32, 128, 3),  # different from the paper
         exportable: bool = False,
-        cfg: Optional[Dict[str, Any]] = None,
+        cfg: dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
 
@@ -89,7 +88,7 @@ class MASTER(_MASTER, Model):
         self.postprocessor = MASTERPostProcessor(vocab=self.vocab)
 
     @tf.function
-    def make_source_and_target_mask(self, source: tf.Tensor, target: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
+    def make_source_and_target_mask(self, source: tf.Tensor, target: tf.Tensor) -> tuple[tf.Tensor, tf.Tensor]:
         # [1, 1, 1, ..., 0, 0, 0] -> 0 is masked
         # (N, 1, 1, max_length)
         target_pad_mask = tf.cast(tf.math.not_equal(target, self.vocab_size + 2), dtype=tf.uint8)
@@ -109,19 +108,17 @@ class MASTER(_MASTER, Model):
     def compute_loss(
         model_output: tf.Tensor,
         gt: tf.Tensor,
-        seq_len: List[int],
+        seq_len: list[int],
     ) -> tf.Tensor:
         """Compute categorical cross-entropy loss for the model.
         Sequences are masked after the EOS character.
 
         Args:
-        ----
             gt: the encoded tensor with gt labels
             model_output: predicted logits of the model
             seq_len: lengths of each gt word inside the batch
 
         Returns:
-        -------
             The loss of the model on the batch
         """
         # Input length : number of timesteps
@@ -144,15 +141,14 @@ class MASTER(_MASTER, Model):
     def call(
         self,
         x: tf.Tensor,
-        target: Optional[List[str]] = None,
+        target: list[str] | None = None,
         return_model_output: bool = False,
         return_preds: bool = False,
         **kwargs: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Call function for training
 
         Args:
-        ----
             x: images
             target: list of str labels
             return_model_output: if True, return logits
@@ -160,7 +156,6 @@ class MASTER(_MASTER, Model):
             **kwargs: keyword arguments passed to the decoder
 
         Returns:
-        -------
             A dictionnary containing eventually loss, logits and predictions.
         """
         # Encode
@@ -171,7 +166,7 @@ class MASTER(_MASTER, Model):
         # add positional encoding to features
         encoded = self.positional_encoding(feature, **kwargs)
 
-        out: Dict[str, tf.Tensor] = {}
+        out: dict[str, tf.Tensor] = {}
 
         if kwargs.get("training", False) and target is None:
             raise ValueError("Need to provide labels during training")
@@ -209,13 +204,11 @@ class MASTER(_MASTER, Model):
         """Decode function for prediction
 
         Args:
-        ----
             encoded: encoded features
             **kwargs: keyword arguments passed to the decoder
 
         Returns:
-        -------
-            A Tuple of tf.Tensor: predictions, logits
+            A tuple of tf.Tensor: predictions, logits
         """
         b = encoded.shape[0]
 
@@ -247,14 +240,13 @@ class MASTERPostProcessor(_MASTERPostProcessor):
     """Post processor for MASTER architectures
 
     Args:
-    ----
         vocab: string containing the ordered sequence of supported characters
     """
 
     def __call__(
         self,
         logits: tf.Tensor,
-    ) -> List[Tuple[str, float]]:
+    ) -> list[tuple[str, float]]:
         # compute pred with argmax for attention models
         out_idxs = tf.math.argmax(logits, axis=2)
         # N x L
@@ -290,9 +282,14 @@ def _master(arch: str, pretrained: bool, backbone_fn, pretrained_backbone: bool 
         cfg=_cfg,
         **kwargs,
     )
+    _build_model(model)
+
     # Load pretrained parameters
     if pretrained:
-        load_pretrained_params(model, default_cfgs[arch]["url"])
+        # The given vocab differs from the pretrained model => skip the mismatching layers for fine tuning
+        load_pretrained_params(
+            model, default_cfgs[arch]["url"], skip_mismatch=kwargs["vocab"] != default_cfgs[arch]["vocab"]
+        )
 
     return model
 
@@ -307,12 +304,10 @@ def master(pretrained: bool = False, **kwargs: Any) -> MASTER:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained (bool): If True, returns a model pre-trained on our text recognition dataset
         **kwargs: keywoard arguments passed to the MASTER architecture
 
     Returns:
-    -------
         text recognition architecture
     """
     return _master("master", pretrained, magc_resnet31, **kwargs)

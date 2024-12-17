@@ -37,7 +37,7 @@ def evaluate(model, val_loader, batch_transforms, val_metric, amp=False):
         if torch.cuda.is_available():
             images = images.cuda()
         images = batch_transforms(images)
-        targets = [{CLASS_NAME: t["boxes"]} for t in targets]
+        targets = [{CLASS_NAME: t} for t in targets]
         if amp:
             with torch.cuda.amp.autocast():
                 out = model(images, targets, return_preds=True)
@@ -82,7 +82,10 @@ def main(args):
         train=True,
         download=True,
         use_polygons=args.rotation,
-        sample_transforms=T.Resize(input_shape),
+        detection_task=True,
+        sample_transforms=T.Resize(
+            input_shape, preserve_aspect_ratio=args.keep_ratio, symmetric_pad=args.symmetric_pad
+        ),
     )
     # Monkeypatch
     subfolder = ds.root.split("/")[-2:]
@@ -92,7 +95,10 @@ def main(args):
         train=False,
         download=True,
         use_polygons=args.rotation,
-        sample_transforms=T.Resize(input_shape),
+        detection_task=True,
+        sample_transforms=T.Resize(
+            input_shape, preserve_aspect_ratio=args.keep_ratio, symmetric_pad=args.symmetric_pad
+        ),
     )
     subfolder = _ds.root.split("/")[-2:]
     ds.data.extend([(os.path.join(*subfolder, name), target) for name, target in _ds.data])
@@ -106,7 +112,7 @@ def main(args):
         pin_memory=torch.cuda.is_available(),
         collate_fn=ds.collate_fn,
     )
-    print(f"Test set loaded in {time.time() - st:.4}s ({len(ds)} samples in " f"{len(test_loader)} batches)")
+    print(f"Test set loaded in {time.time() - st:.4}s ({len(ds)} samples in {len(test_loader)} batches)")
 
     batch_transforms = Normalize(mean=mean, std=std)
 
@@ -137,8 +143,7 @@ def main(args):
     print("Running evaluation")
     val_loss, recall, precision, mean_iou = evaluate(model, test_loader, batch_transforms, metric, amp=args.amp)
     print(
-        f"Validation loss: {val_loss:.6} (Recall: {recall:.2%} | Precision: {precision:.2%} | "
-        f"Mean IoU: {mean_iou:.2%})"
+        f"Validation loss: {val_loss:.6} (Recall: {recall:.2%} | Precision: {precision:.2%} | Mean IoU: {mean_iou:.2%})"
     )
 
 
@@ -155,6 +160,8 @@ def parse_args():
     parser.add_argument("-b", "--batch_size", type=int, default=2, help="batch size for evaluation")
     parser.add_argument("--device", default=None, type=int, help="device")
     parser.add_argument("--size", type=int, default=None, help="model input size, H = W")
+    parser.add_argument("--keep_ratio", action="store_true", help="keep the aspect ratio of the input image")
+    parser.add_argument("--symmetric_pad", action="store_true", help="pad the image symmetrically")
     parser.add_argument("-j", "--workers", type=int, default=None, help="number of workers used for dataloading")
     parser.add_argument("--rotation", dest="rotation", action="store_true", help="inference with rotated bbox")
     parser.add_argument("--resume", type=str, default=None, help="Checkpoint to resume")

@@ -4,9 +4,10 @@
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
 import math
+from collections.abc import Callable
 from copy import deepcopy
 from itertools import permutations
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import numpy as np
 import torch
@@ -23,7 +24,7 @@ from .base import _PARSeq, _PARSeqPostProcessor
 
 __all__ = ["PARSeq", "parseq"]
 
-default_cfgs: Dict[str, Dict[str, Any]] = {
+default_cfgs: dict[str, dict[str, Any]] = {
     "parseq": {
         "mean": (0.694, 0.695, 0.693),
         "std": (0.299, 0.296, 0.301),
@@ -38,7 +39,6 @@ class CharEmbedding(nn.Module):
     """Implements the character embedding module
 
     Args:
-    ----
         vocab_size: size of the vocabulary
         d_model: dimension of the model
     """
@@ -56,7 +56,6 @@ class PARSeqDecoder(nn.Module):
     """Implements decoder module of the PARSeq model
 
     Args:
-    ----
         d_model: dimension of the model
         num_heads: number of attention heads
         ffd: dimension of the feed forward layer
@@ -92,7 +91,7 @@ class PARSeqDecoder(nn.Module):
         target,
         content,
         memory,
-        target_mask: Optional[torch.Tensor] = None,
+        target_mask: torch.Tensor | None = None,
     ):
         query_norm = self.query_norm(target)
         content_norm = self.content_norm(content)
@@ -112,7 +111,6 @@ class PARSeq(_PARSeq, nn.Module):
     Slightly modified implementation based on the official Pytorch implementation: <https://github.com/baudm/parseq/tree/main`_.
 
     Args:
-    ----
         feature_extractor: the backbone serving as feature extractor
         vocab: vocabulary used for encoding
         embedding_units: number of embedding units
@@ -136,9 +134,9 @@ class PARSeq(_PARSeq, nn.Module):
         dec_num_heads: int = 12,
         dec_ff_dim: int = 384,  # we use it from the original implementation instead of 2048
         dec_ffd_ratio: int = 4,
-        input_shape: Tuple[int, int, int] = (3, 32, 128),
+        input_shape: tuple[int, int, int] = (3, 32, 128),
         exportable: bool = False,
-        cfg: Optional[Dict[str, Any]] = None,
+        cfg: dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
         self.vocab = vocab
@@ -212,12 +210,12 @@ class PARSeq(_PARSeq, nn.Module):
 
         sos_idx = torch.zeros(len(final_perms), 1, device=seqlen.device)
         eos_idx = torch.full((len(final_perms), 1), max_num_chars + 1, device=seqlen.device)
-        combined = torch.cat([sos_idx, final_perms + 1, eos_idx], dim=1).int()
+        combined = torch.cat([sos_idx, final_perms + 1, eos_idx], dim=1).int()  # type: ignore[list-item]
         if len(combined) > 1:
             combined[1, 1:] = max_num_chars + 1 - torch.arange(max_num_chars + 1, device=seqlen.device)
         return combined
 
-    def generate_permutations_attention_masks(self, permutation: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def generate_permutations_attention_masks(self, permutation: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # Generate source and target mask for the decoder attention.
         sz = permutation.shape[0]
         mask = torch.ones((sz, sz), device=permutation.device)
@@ -236,8 +234,8 @@ class PARSeq(_PARSeq, nn.Module):
         self,
         target: torch.Tensor,
         memory: torch.Tensor,
-        target_mask: Optional[torch.Tensor] = None,
-        target_query: Optional[torch.Tensor] = None,
+        target_mask: torch.Tensor | None = None,
+        target_query: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Add positional information to the target sequence and pass it through the decoder."""
         batch_size, sequence_length = target.shape
@@ -250,7 +248,7 @@ class PARSeq(_PARSeq, nn.Module):
         target_query = self.dropout(target_query)
         return self.decoder(target_query, content, memory, target_mask)
 
-    def decode_autoregressive(self, features: torch.Tensor, max_len: Optional[int] = None) -> torch.Tensor:
+    def decode_autoregressive(self, features: torch.Tensor, max_len: int | None = None) -> torch.Tensor:
         """Generate predictions for the given features."""
         max_length = max_len if max_len is not None else self.max_length
         max_length = min(max_length, self.max_length) + 1
@@ -283,7 +281,7 @@ class PARSeq(_PARSeq, nn.Module):
 
                 # Stop decoding if all sequences have reached the EOS token
                 # NOTE: `break` isn't correctly translated to Onnx so we don't break here if we want to export
-                if not self.exportable and max_len is None and (ys == self.vocab_size).any(dim=-1).all():
+                if not self.exportable and max_len is None and (ys == self.vocab_size).any(dim=-1).all():  # type: ignore[attr-defined]
                     break
 
         logits = torch.cat(pos_logits, dim=1)  # (N, max_length, vocab_size + 1)
@@ -298,7 +296,7 @@ class PARSeq(_PARSeq, nn.Module):
 
         # Create padding mask for refined target input maskes all behind EOS token as False
         # (N, 1, 1, max_length)
-        target_pad_mask = ~((ys == self.vocab_size).int().cumsum(-1) > 0).unsqueeze(1).unsqueeze(1)
+        target_pad_mask = ~((ys == self.vocab_size).int().cumsum(-1) > 0).unsqueeze(1).unsqueeze(1)  # type: ignore[attr-defined]
         mask = (target_pad_mask.bool() & query_mask[:, : ys.shape[1]].bool()).int()
         logits = self.head(self.decode(ys, features, mask, target_query=pos_queries))
 
@@ -307,10 +305,10 @@ class PARSeq(_PARSeq, nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        target: Optional[List[str]] = None,
+        target: list[str] | None = None,
         return_model_output: bool = False,
         return_preds: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         features = self.feat_extractor(x)["features"]  # (batch_size, patches_seqlen, d_model)
         # remove cls token
         features = features[:, 1:, :]
@@ -337,7 +335,7 @@ class PARSeq(_PARSeq, nn.Module):
                 ).unsqueeze(1).unsqueeze(1)  # (N, 1, 1, seq_len)
 
                 loss = torch.tensor(0.0, device=features.device)
-                loss_numel: Union[int, float] = 0
+                loss_numel: int | float = 0
                 n = (gt_out != self.vocab_size + 2).sum().item()
                 for i, perm in enumerate(tgt_perms):
                     _, target_mask = self.generate_permutations_attention_masks(perm)  # (seq_len, seq_len)
@@ -365,7 +363,7 @@ class PARSeq(_PARSeq, nn.Module):
 
         logits = _bf16_to_float32(logits)
 
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         if self.exportable:
             out["logits"] = logits
             return out
@@ -374,8 +372,13 @@ class PARSeq(_PARSeq, nn.Module):
             out["out_map"] = logits
 
         if target is None or return_preds:
+            # Disable for torch.compile compatibility
+            @torch.compiler.disable  # type: ignore[attr-defined]
+            def _postprocess(logits: torch.Tensor) -> list[tuple[str, float]]:
+                return self.postprocessor(logits)
+
             # Post-process boxes
-            out["preds"] = self.postprocessor(logits)
+            out["preds"] = _postprocess(logits)
 
         if target is not None:
             out["loss"] = loss
@@ -387,14 +390,13 @@ class PARSeqPostProcessor(_PARSeqPostProcessor):
     """Post processor for PARSeq architecture
 
     Args:
-    ----
         vocab: string containing the ordered sequence of supported characters
     """
 
     def __call__(
         self,
         logits: torch.Tensor,
-    ) -> List[Tuple[str, float]]:
+    ) -> list[tuple[str, float]]:
         # compute pred with argmax for attention models
         out_idxs = logits.argmax(-1)
         preds_prob = torch.softmax(logits, -1).max(dim=-1)[0]
@@ -417,7 +419,7 @@ def _parseq(
     pretrained: bool,
     backbone_fn: Callable[[bool], nn.Module],
     layer: str,
-    ignore_keys: Optional[List[str]] = None,
+    ignore_keys: list[str] | None = None,
     **kwargs: Any,
 ) -> PARSeq:
     # Patch the config
@@ -462,12 +464,10 @@ def parseq(pretrained: bool = False, **kwargs: Any) -> PARSeq:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained (bool): If True, returns a model pre-trained on our text recognition dataset
         **kwargs: keyword arguments of the PARSeq architecture
 
     Returns:
-    -------
         text recognition architecture
     """
     return _parseq(

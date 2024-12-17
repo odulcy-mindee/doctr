@@ -4,7 +4,8 @@
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
 import random
-from typing import Any, Callable, Iterable, List, Optional, Tuple, Union
+from collections.abc import Callable, Iterable
+from typing import Any
 
 import numpy as np
 import tensorflow as tf
@@ -43,13 +44,12 @@ class Compose(NestedObject):
     >>> out = transfos(tf.random.uniform(shape=[64, 64, 3], minval=0, maxval=1))
 
     Args:
-    ----
         transforms: list of transformation modules
     """
 
-    _children_names: List[str] = ["transforms"]
+    _children_names: list[str] = ["transforms"]
 
-    def __init__(self, transforms: List[Callable[[Any], Any]]) -> None:
+    def __init__(self, transforms: list[Callable[[Any], Any]]) -> None:
         self.transforms = transforms
 
     def __call__(self, x: Any) -> Any:
@@ -68,7 +68,6 @@ class Resize(NestedObject):
     >>> out = transfo(tf.random.uniform(shape=[64, 64, 3], minval=0, maxval=1))
 
     Args:
-    ----
         output_size: expected output size
         method: interpolation method
         preserve_aspect_ratio: if `True`, preserve aspect ratio and pad the rest with zeros
@@ -77,7 +76,7 @@ class Resize(NestedObject):
 
     def __init__(
         self,
-        output_size: Union[int, Tuple[int, int]],
+        output_size: int | tuple[int, int],
         method: str = "bilinear",
         preserve_aspect_ratio: bool = False,
         symmetric_pad: bool = False,
@@ -104,32 +103,37 @@ class Resize(NestedObject):
     def __call__(
         self,
         img: tf.Tensor,
-        target: Optional[np.ndarray] = None,
-    ) -> Union[tf.Tensor, Tuple[tf.Tensor, np.ndarray]]:
+        target: np.ndarray | None = None,
+    ) -> tf.Tensor | tuple[tf.Tensor, np.ndarray]:
         input_dtype = img.dtype
+        self.output_size = (
+            (self.output_size, self.output_size) if isinstance(self.output_size, int) else self.output_size
+        )
 
         img = tf.image.resize(img, self.wanted_size, self.method, self.preserve_aspect_ratio, self.antialias)
         # It will produce an un-padded resized image, with a side shorter than wanted if we preserve aspect ratio
         raw_shape = img.shape[:2]
+        if self.symmetric_pad:
+            half_pad = (int((self.output_size[0] - img.shape[0]) / 2), 0)
         if self.preserve_aspect_ratio:
             if isinstance(self.output_size, (tuple, list)):
                 # In that case we need to pad because we want to enforce both width and height
                 if not self.symmetric_pad:
-                    offset = (0, 0)
+                    half_pad = (0, 0)
                 elif self.output_size[0] == img.shape[0]:
-                    offset = (0, int((self.output_size[1] - img.shape[1]) / 2))
-                else:
-                    offset = (int((self.output_size[0] - img.shape[0]) / 2), 0)
-                img = tf.image.pad_to_bounding_box(img, *offset, *self.output_size)
+                    half_pad = (0, int((self.output_size[1] - img.shape[1]) / 2))
+                # Pad image
+                img = tf.image.pad_to_bounding_box(img, *half_pad, *self.output_size)
 
         # In case boxes are provided, resize boxes if needed (for detection task if preserve aspect ratio)
         if target is not None:
+            if self.symmetric_pad:
+                offset = half_pad[0] / img.shape[0], half_pad[1] / img.shape[1]
+
             if self.preserve_aspect_ratio:
                 # Get absolute coords
                 if target.shape[1:] == (4,):
                     if isinstance(self.output_size, (tuple, list)) and self.symmetric_pad:
-                        if np.max(target) <= 1:
-                            offset = offset[0] / img.shape[0], offset[1] / img.shape[1]
                         target[:, [0, 2]] = offset[1] + target[:, [0, 2]] * raw_shape[1] / img.shape[1]
                         target[:, [1, 3]] = offset[0] + target[:, [1, 3]] * raw_shape[0] / img.shape[0]
                     else:
@@ -137,16 +141,15 @@ class Resize(NestedObject):
                         target[:, [1, 3]] *= raw_shape[0] / img.shape[0]
                 elif target.shape[1:] == (4, 2):
                     if isinstance(self.output_size, (tuple, list)) and self.symmetric_pad:
-                        if np.max(target) <= 1:
-                            offset = offset[0] / img.shape[0], offset[1] / img.shape[1]
                         target[..., 0] = offset[1] + target[..., 0] * raw_shape[1] / img.shape[1]
                         target[..., 1] = offset[0] + target[..., 1] * raw_shape[0] / img.shape[0]
                     else:
                         target[..., 0] *= raw_shape[1] / img.shape[1]
                         target[..., 1] *= raw_shape[0] / img.shape[0]
                 else:
-                    raise AssertionError
-            return tf.cast(img, dtype=input_dtype), target
+                    raise AssertionError("Boxes should be in the format (n_boxes, 4, 2) or (n_boxes, 4)")
+
+            return tf.cast(img, dtype=input_dtype), np.clip(target, 0, 1)
 
         return tf.cast(img, dtype=input_dtype)
 
@@ -160,12 +163,11 @@ class Normalize(NestedObject):
     >>> out = transfo(tf.random.uniform(shape=[8, 64, 64, 3], minval=0, maxval=1))
 
     Args:
-    ----
         mean: average value per channel
         std: standard deviation per channel
     """
 
-    def __init__(self, mean: Tuple[float, float, float], std: Tuple[float, float, float]) -> None:
+    def __init__(self, mean: tuple[float, float, float], std: tuple[float, float, float]) -> None:
         self.mean = tf.constant(mean)
         self.std = tf.constant(std)
 
@@ -187,7 +189,6 @@ class LambdaTransformation(NestedObject):
     >>> out = transfo(tf.random.uniform(shape=[8, 64, 64, 3], minval=0, maxval=1))
 
     Args:
-    ----
         fn: the function to be applied to the input tensor
     """
 
@@ -225,7 +226,6 @@ class RandomBrightness(NestedObject):
     >>> out = transfo(tf.random.uniform(shape=[8, 64, 64, 3], minval=0, maxval=1))
 
     Args:
-    ----
         max_delta: offset to add to each pixel is randomly picked in [-max_delta, max_delta]
         p: probability to apply transformation
     """
@@ -250,7 +250,6 @@ class RandomContrast(NestedObject):
     >>> out = transfo(tf.random.uniform(shape=[8, 64, 64, 3], minval=0, maxval=1))
 
     Args:
-    ----
         delta: multiplicative factor is picked in [1-delta, 1+delta] (reduce contrast if factor<1)
     """
 
@@ -274,7 +273,6 @@ class RandomSaturation(NestedObject):
     >>> out = transfo(tf.random.uniform(shape=[8, 64, 64, 3], minval=0, maxval=1))
 
     Args:
-    ----
         delta: multiplicative factor is picked in [1-delta, 1+delta] (reduce saturation if factor<1)
     """
 
@@ -297,7 +295,6 @@ class RandomHue(NestedObject):
     >>> out = transfo(tf.random.uniform(shape=[8, 64, 64, 3], minval=0, maxval=1))
 
     Args:
-    ----
         max_delta: offset to add to each pixel is randomly picked in [-max_delta, max_delta]
     """
 
@@ -320,7 +317,6 @@ class RandomGamma(NestedObject):
     >>> out = transfo(tf.random.uniform(shape=[8, 64, 64, 3], minval=0, maxval=1))
 
     Args:
-    ----
         min_gamma: non-negative real number, lower bound for gamma param
         max_gamma: non-negative real number, upper bound for gamma
         min_gain: lower bound for constant multiplier
@@ -358,7 +354,6 @@ class RandomJpegQuality(NestedObject):
     >>> out = transfo(tf.random.uniform(shape=[64, 64, 3], minval=0, maxval=1))
 
     Args:
-    ----
         min_quality: int between [0, 100]
         max_quality: int between [0, 100]
     """
@@ -383,19 +378,17 @@ class GaussianBlur(NestedObject):
     >>> out = transfo(tf.random.uniform(shape=[64, 64, 3], minval=0, maxval=1))
 
     Args:
-    ----
         kernel_shape: size of the blurring kernel
         std: min and max value of the standard deviation
     """
 
-    def __init__(self, kernel_shape: Union[int, Iterable[int]], std: Tuple[float, float]) -> None:
+    def __init__(self, kernel_shape: int | Iterable[int], std: tuple[float, float]) -> None:
         self.kernel_shape = kernel_shape
         self.std = std
 
     def extra_repr(self) -> str:
         return f"kernel_shape={self.kernel_shape}, std={self.std}"
 
-    @tf.function
     def __call__(self, img: tf.Tensor) -> tf.Tensor:
         return tf.squeeze(
             _gaussian_filter(
@@ -427,7 +420,6 @@ class GaussianNoise(NestedObject):
     >>> out = transfo(tf.random.uniform(shape=[64, 64, 3], minval=0, maxval=1))
 
     Args:
-    ----
         mean : mean of the gaussian distribution
         std : std of the gaussian distribution
     """
@@ -462,7 +454,6 @@ class RandomHorizontalFlip(NestedObject):
     >>> out = transfo(image, target)
 
     Args:
-    ----
         p : probability of Horizontal Flip
     """
 
@@ -470,7 +461,7 @@ class RandomHorizontalFlip(NestedObject):
         super().__init__()
         self.p = p
 
-    def __call__(self, img: Union[tf.Tensor, np.ndarray], target: np.ndarray) -> Tuple[tf.Tensor, np.ndarray]:
+    def __call__(self, img: tf.Tensor | np.ndarray, target: np.ndarray) -> tuple[tf.Tensor, np.ndarray]:
         if np.random.rand(1) <= self.p:
             _img = tf.image.flip_left_right(img)
             _target = target.copy()
@@ -492,11 +483,10 @@ class RandomShadow(NestedObject):
     >>> out = transfo(tf.random.uniform(shape=[64, 64, 3], minval=0, maxval=1))
 
     Args:
-    ----
         opacity_range : minimum and maximum opacity of the shade
     """
 
-    def __init__(self, opacity_range: Optional[Tuple[float, float]] = None) -> None:
+    def __init__(self, opacity_range: tuple[float, float] | None = None) -> None:
         super().__init__()
         self.opacity_range = opacity_range if isinstance(opacity_range, tuple) else (0.2, 0.8)
 
@@ -527,20 +517,19 @@ class RandomResize(NestedObject):
     >>> out = transfo(tf.random.uniform(shape=[64, 64, 3], minval=0, maxval=1))
 
     Args:
-    ----
         scale_range: range of the resizing factor for width and height (independently)
         preserve_aspect_ratio: whether to preserve the aspect ratio of the image,
-            given a float value, the aspect ratio will be preserved with this probability
+        given a float value, the aspect ratio will be preserved with this probability
         symmetric_pad: whether to symmetrically pad the image,
-            given a float value, the symmetric padding will be applied with this probability
+        given a float value, the symmetric padding will be applied with this probability
         p: probability to apply the transformation
     """
 
     def __init__(
         self,
-        scale_range: Tuple[float, float] = (0.3, 0.9),
-        preserve_aspect_ratio: Union[bool, float] = False,
-        symmetric_pad: Union[bool, float] = False,
+        scale_range: tuple[float, float] = (0.3, 0.9),
+        preserve_aspect_ratio: bool | float = False,
+        symmetric_pad: bool | float = False,
         p: float = 0.5,
     ):
         super().__init__()
@@ -550,7 +539,7 @@ class RandomResize(NestedObject):
         self.p = p
         self._resize = Resize
 
-    def __call__(self, img: tf.Tensor, target: np.ndarray) -> Tuple[tf.Tensor, np.ndarray]:
+    def __call__(self, img: tf.Tensor, target: np.ndarray) -> tuple[tf.Tensor, np.ndarray]:
         if np.random.rand(1) <= self.p:
             scale_h = random.uniform(*self.scale_range)
             scale_w = random.uniform(*self.scale_range)

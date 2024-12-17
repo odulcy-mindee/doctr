@@ -4,7 +4,7 @@
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
 import os
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any
 
 import defusedxml.ElementTree as ET
 import numpy as np
@@ -28,10 +28,10 @@ class IC03(VisionDataset):
     >>> img, target = train_set[0]
 
     Args:
-    ----
         train: whether the subset should be the training one
         use_polygons: whether polygons should be considered as rotated bounding box (instead of straight ones)
         recognition_task: whether the dataset should be used for recognition task
+        detection_task: whether the dataset should be used for detection task
         **kwargs: keyword arguments from `VisionDataset`.
     """
 
@@ -51,6 +51,7 @@ class IC03(VisionDataset):
         train: bool = True,
         use_polygons: bool = False,
         recognition_task: bool = False,
+        detection_task: bool = False,
         **kwargs: Any,
     ) -> None:
         url, sha256, file_name = self.TRAIN if train else self.TEST
@@ -62,8 +63,14 @@ class IC03(VisionDataset):
             pre_transforms=convert_target_to_relative if not recognition_task else None,
             **kwargs,
         )
+        if recognition_task and detection_task:
+            raise ValueError(
+                "`recognition_task` and `detection_task` cannot be set to True simultaneously. "
+                + "To get the whole dataset with boxes and labels leave both parameters to False."
+            )
+
         self.train = train
-        self.data: List[Tuple[Union[str, np.ndarray], Union[str, Dict[str, Any]]]] = []
+        self.data: list[tuple[str | np.ndarray, str | dict[str, Any] | np.ndarray]] = []
         np_dtype = np.float32
 
         # Load xml data
@@ -117,6 +124,8 @@ class IC03(VisionDataset):
                     for crop, label in zip(crops, labels):
                         if crop.shape[0] > 0 and crop.shape[1] > 0 and len(label) > 0:
                             self.data.append((crop, label))
+                elif detection_task:
+                    self.data.append((name.text, boxes))
                 else:
                     self.data.append((name.text, dict(boxes=boxes, labels=labels)))
 

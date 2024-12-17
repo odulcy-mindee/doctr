@@ -3,7 +3,6 @@
 # This program is licensed under the Apache License 2.0.
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
-from typing import Tuple
 
 import numpy as np
 import tensorflow as tf
@@ -19,12 +18,10 @@ def tensor_from_pil(pil_img: Image.Image, dtype: tf.dtypes.DType = tf.float32) -
     """Convert a PIL Image to a TensorFlow tensor
 
     Args:
-    ----
         pil_img: a PIL image
         dtype: the output tensor data type
 
     Returns:
-    -------
         decoded image as tensor
     """
     npy_img = img_to_array(pil_img)
@@ -36,12 +33,10 @@ def read_img_as_tensor(img_path: AbstractPath, dtype: tf.dtypes.DType = tf.float
     """Read an image file as a TensorFlow tensor
 
     Args:
-    ----
         img_path: location of the image file
         dtype: the desired data type of the output tensor. If it is float-related, values will be divided by 255.
 
     Returns:
-    -------
         decoded image as a tensor
     """
     if dtype not in (tf.uint8, tf.float16, tf.float32):
@@ -61,12 +56,10 @@ def decode_img_as_tensor(img_content: bytes, dtype: tf.dtypes.DType = tf.float32
     """Read a byte stream as a TensorFlow tensor
 
     Args:
-    ----
         img_content: bytes of a decoded image
         dtype: the desired data type of the output tensor. If it is float-related, values will be divided by 255.
 
     Returns:
-    -------
         decoded image as a tensor
     """
     if dtype not in (tf.uint8, tf.float16, tf.float32):
@@ -85,12 +78,10 @@ def tensor_from_numpy(npy_img: np.ndarray, dtype: tf.dtypes.DType = tf.float32) 
     """Read an image file as a TensorFlow tensor
 
     Args:
-    ----
         npy_img: image encoded as a numpy array of shape (H, W, C) in np.uint8
         dtype: the desired data type of the output tensor. If it is float-related, values will be divided by 255.
 
     Returns:
-    -------
         same image as a tensor of shape (H, W, C)
     """
     if dtype not in (tf.uint8, tf.float16, tf.float32):
@@ -105,6 +96,6 @@ def tensor_from_numpy(npy_img: np.ndarray, dtype: tf.dtypes.DType = tf.float32) 
     return img
 
 
-def get_img_shape(img: tf.Tensor) -> Tuple[int, int]:
+def get_img_shape(img: tf.Tensor) -> tuple[int, int]:
     """Get the shape of an image"""
     return img.shape[:2]

@@ -3,7 +3,8 @@
 # This program is licensed under the Apache License 2.0.
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
-from typing import Any, List, Sequence, Tuple, Union
+from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 import torch
@@ -21,7 +22,6 @@ class RecognitionPredictor(nn.Module):
     """Implements an object able to identify character sequences in images
 
     Args:
-    ----
         pre_processor: transform inputs for easier batched model inference
         model: core detection architecture
         split_wide_crops: wether to use crop splitting for high aspect ratio crops
@@ -44,9 +44,9 @@ class RecognitionPredictor(nn.Module):
     @torch.inference_mode()
     def forward(
         self,
-        crops: Sequence[Union[np.ndarray, torch.Tensor]],
+        crops: Sequence[np.ndarray | torch.Tensor],
         **kwargs: Any,
-    ) -> List[Tuple[str, float]]:
+    ) -> list[tuple[str, float]]:
         if len(crops) == 0:
             return []
         # Dimension check
@@ -67,7 +67,7 @@ class RecognitionPredictor(nn.Module):
                 crops = new_crops
 
         # Resize & batch them
-        processed_batches = self.pre_processor(crops)
+        processed_batches = self.pre_processor(crops)  # type: ignore[arg-type]
 
         # Forward it
         _params = next(self.model.parameters())

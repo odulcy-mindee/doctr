@@ -4,7 +4,7 @@
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
 import os
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any
 
 import numpy as np
 import scipy.io as sio
@@ -30,10 +30,10 @@ class IIIT5K(VisionDataset):
     >>> img, target = train_set[0]
 
     Args:
-    ----
         train: whether the subset should be the training one
         use_polygons: whether polygons should be considered as rotated bounding box (instead of straight ones)
         recognition_task: whether the dataset should be used for recognition task
+        detection_task: whether the dataset should be used for detection task
         **kwargs: keyword arguments from `VisionDataset`.
     """
 
@@ -45,6 +45,7 @@ class IIIT5K(VisionDataset):
         train: bool = True,
         use_polygons: bool = False,
         recognition_task: bool = False,
+        detection_task: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -55,6 +56,12 @@ class IIIT5K(VisionDataset):
             pre_transforms=convert_target_to_relative if not recognition_task else None,
             **kwargs,
         )
+        if recognition_task and detection_task:
+            raise ValueError(
+                "`recognition_task` and `detection_task` cannot be set to True simultaneously. "
+                + "To get the whole dataset with boxes and labels leave both parameters to False."
+            )
+
         self.train = train
 
         # Load mat data
@@ -62,7 +69,7 @@ class IIIT5K(VisionDataset):
         mat_file = "trainCharBound" if self.train else "testCharBound"
         mat_data = sio.loadmat(os.path.join(tmp_root, f"{mat_file}.mat"))[mat_file][0]
 
-        self.data: List[Tuple[Union[str, np.ndarray], Union[str, Dict[str, Any]]]] = []
+        self.data: list[tuple[str | np.ndarray, str | dict[str, Any] | np.ndarray]] = []
         np_dtype = np.float32
 
         for img_path, label, box_targets in tqdm(iterable=mat_data, desc="Unpacking IIIT5K", total=len(mat_data)):
@@ -73,24 +80,26 @@ class IIIT5K(VisionDataset):
             if not os.path.exists(os.path.join(tmp_root, _raw_path)):
                 raise FileNotFoundError(f"unable to locate {os.path.join(tmp_root, _raw_path)}")
 
+            if use_polygons:
+                # (x, y) coordinates of top left, top right, bottom right, bottom left corners
+                box_targets = [
+                    [
+                        [box[0], box[1]],
+                        [box[0] + box[2], box[1]],
+                        [box[0] + box[2], box[1] + box[3]],
+                        [box[0], box[1] + box[3]],
+                    ]
+                    for box in box_targets
+                ]
+            else:
+                # xmin, ymin, xmax, ymax
+                box_targets = [[box[0], box[1], box[0] + box[2], box[1] + box[3]] for box in box_targets]
+
             if recognition_task:
                 self.data.append((_raw_path, _raw_label))
+            elif detection_task:
+                self.data.append((_raw_path, np.asarray(box_targets, dtype=np_dtype)))
             else:
-                if use_polygons:
-                    # (x, y) coordinates of top left, top right, bottom right, bottom left corners
-                    box_targets = [
-                        [
-                            [box[0], box[1]],
-                            [box[0] + box[2], box[1]],
-                            [box[0] + box[2], box[1] + box[3]],
-                            [box[0], box[1] + box[3]],
-                        ]
-                        for box in box_targets
-                    ]
-                else:
-                    # xmin, ymin, xmax, ymax
-                    box_targets = [[box[0], box[1], box[0] + box[2], box[1] + box[3]] for box in box_targets]
-
                 # label are casted to list where each char corresponds to the character's bounding box
                 self.data.append((
                     _raw_path,

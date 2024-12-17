@@ -4,25 +4,25 @@
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from tensorflow.keras import layers
 from tensorflow.keras.models import Sequential
 
 from doctr.datasets import VOCABS
 
-from ...utils import conv_sequence, load_pretrained_params
+from ...utils import _build_model, conv_sequence, load_pretrained_params
 
 __all__ = ["VGG", "vgg16_bn_r"]
 
 
-default_cfgs: Dict[str, Dict[str, Any]] = {
+default_cfgs: dict[str, dict[str, Any]] = {
     "vgg16_bn_r": {
         "mean": (0.5, 0.5, 0.5),
         "std": (1.0, 1.0, 1.0),
         "input_shape": (32, 32, 3),
         "classes": list(VOCABS["french"]),
-        "url": "https://doctr-static.mindee.com/models?id=v0.4.1/vgg16_bn_r-c5836cea.zip&src=0",
+        "url": "https://doctr-static.mindee.com/models?id=v0.9.0/vgg16_bn_r-b4d69212.weights.h5&src=0",
     },
 }
 
@@ -32,7 +32,6 @@ class VGG(Sequential):
     <https://arxiv.org/pdf/1409.1556.pdf>`_.
 
     Args:
-    ----
         num_blocks: number of convolutional block in each stage
         planes: number of output channels in each stage
         rect_pools: whether pooling square kernels should be replace with rectangular ones
@@ -43,13 +42,13 @@ class VGG(Sequential):
 
     def __init__(
         self,
-        num_blocks: List[int],
-        planes: List[int],
-        rect_pools: List[bool],
+        num_blocks: list[int],
+        planes: list[int],
+        rect_pools: list[bool],
         include_top: bool = False,
         num_classes: int = 1000,
-        input_shape: Optional[Tuple[int, int, int]] = None,
-        cfg: Optional[Dict[str, Any]] = None,
+        input_shape: tuple[int, int, int] | None = None,
+        cfg: dict[str, Any] | None = None,
     ) -> None:
         _layers = []
         # Specify input_shape only for the first layer
@@ -67,7 +66,7 @@ class VGG(Sequential):
 
 
 def _vgg(
-    arch: str, pretrained: bool, num_blocks: List[int], planes: List[int], rect_pools: List[bool], **kwargs: Any
+    arch: str, pretrained: bool, num_blocks: list[int], planes: list[int], rect_pools: list[bool], **kwargs: Any
 ) -> VGG:
     kwargs["num_classes"] = kwargs.get("num_classes", len(default_cfgs[arch]["classes"]))
     kwargs["input_shape"] = kwargs.get("input_shape", default_cfgs[arch]["input_shape"])
@@ -81,9 +80,15 @@ def _vgg(
 
     # Build the model
     model = VGG(num_blocks, planes, rect_pools, cfg=_cfg, **kwargs)
+    _build_model(model)
+
     # Load pretrained parameters
     if pretrained:
-        load_pretrained_params(model, default_cfgs[arch]["url"])
+        # The number of classes is not the same as the number of classes in the pretrained model =>
+        # skip the mismatching layers for fine tuning
+        load_pretrained_params(
+            model, default_cfgs[arch]["url"], skip_mismatch=kwargs["num_classes"] != len(default_cfgs[arch]["classes"])
+        )
 
     return model
 
@@ -100,12 +105,10 @@ def vgg16_bn_r(pretrained: bool = False, **kwargs: Any) -> VGG:
     >>> out = model(input_tensor)
 
     Args:
-    ----
         pretrained (bool): If True, returns a model pre-trained on ImageNet
         **kwargs: keyword arguments of the VGG architecture
 
     Returns:
-    -------
         VGG feature extractor
     """
     return _vgg(

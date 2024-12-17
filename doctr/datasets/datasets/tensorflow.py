@@ -52,7 +52,7 @@ class AbstractDataset(_AbstractDataset):
         images, targets = zip(*samples)
         images = tf.stack(images, axis=0)
 
-        return images, targets
+        return images, list(targets)
 
 
 class VisionDataset(AbstractDataset, _VisionDataset):  # noqa: D101

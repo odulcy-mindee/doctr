@@ -5,33 +5,35 @@
 
 import os
 
-from doctr.file_utils import ensure_keras_v2
-
-ensure_keras_v2()
-
-os.environ["USE_TF"] = "1"
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+os.environ["USE_TORCH"] = "1"
 
 import datetime
+import logging
+import multiprocessing as mp
 import time
 from pathlib import Path
 
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras import Model, mixed_precision, optimizers
+import torch
+import wandb
+from torch.nn.functional import cross_entropy
+from torch.optim.lr_scheduler import CosineAnnealingLR, MultiplicativeLR, OneCycleLR
+from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
+from torchvision.transforms import functional as F
+from torchvision.transforms.v2 import (
+    Compose,
+    GaussianBlur,
+    Normalize,
+    RandomGrayscale,
+    RandomPerspective,
+    RandomPhotometricDistort,
+)
 from tqdm.auto import tqdm
 
-from doctr.models import login_to_hub, push_to_hf_hub
-
-gpu_devices = tf.config.list_physical_devices("GPU")
-if any(gpu_devices):
-    tf.config.experimental.set_memory_growth(gpu_devices[0], True)
-
 from doctr import transforms as T
-from doctr.datasets import DataLoader, OrientationDataset
-from doctr.models import classification
+from doctr.datasets import OrientationDataset
+from doctr.models import classification, login_to_hub, push_to_hf_hub
 from doctr.models.utils import export_model_to_onnx
-from doctr.transforms.functional import rotated_img_tensor
 from utils import EarlyStopper, plot_recorder, plot_samples
 
 SLACK_WEBHOOK_URL = None
@@ -64,19 +66,18 @@ def send_on_slack(text: str):
 CLASSES = [0, -90, 180, 90]
 
 
-def rnd_rotate(img: tf.Tensor, target):
+def rnd_rotate(img: torch.Tensor, target):
     angle = int(np.random.choice(CLASSES))
     idx = CLASSES.index(angle)
     # augment the angle randomly with a probability of 0.5
     if np.random.rand() < 0.5:
         angle += float(np.random.choice(np.arange(-25, 25, 5)))
-    # clockwise rotation
-    rotated_img = rotated_img_tensor(img, -angle, expand=angle not in CLASSES)
+    rotated_img = F.rotate(img, angle=-angle, fill=0, expand=angle not in CLASSES)[:3]
     return rotated_img, idx
 
 
 def record_lr(
-    model: Model,
+    model: torch.nn.Module,
     train_loader: DataLoader,
     batch_transforms,
     optimizer,
@@ -91,46 +92,58 @@ def record_lr(
     if num_it > len(train_loader):
         raise ValueError("the value of `num_it` needs to be lower than the number of available batches")
 
+    model = model.train()
     # Update param groups & LR
+    optimizer.defaults["lr"] = start_lr
+    for pgroup in optimizer.param_groups:
+        pgroup["lr"] = start_lr
+
     gamma = (end_lr / start_lr) ** (1 / (num_it - 1))
-    optimizer.learning_rate = start_lr
+    scheduler = MultiplicativeLR(optimizer, lambda step: gamma)
 
     lr_recorder = [start_lr * gamma**idx for idx in range(num_it)]
     loss_recorder = []
 
+    if amp:
+        scaler = torch.cuda.amp.GradScaler()
+
     for batch_idx, (images, targets) in enumerate(train_loader):
+        if torch.cuda.is_available():
+            images = images.cuda()
+            targets = targets.cuda()
+
         images = batch_transforms(images)
 
         # Forward, Backward & update
-        with tf.GradientTape() as tape:
-            out = model(images, training=True)
-            train_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(targets, out)
-        grads = tape.gradient(train_loss, model.trainable_weights)
-
+        optimizer.zero_grad()
         if amp:
-            grads = optimizer.get_unscaled_gradients(grads)
-        optimizer.apply_gradients(zip(grads, model.trainable_weights))
-
-        optimizer.learning_rate = optimizer.learning_rate * gamma
+            with torch.cuda.amp.autocast():
+                out = model(images)
+                train_loss = cross_entropy(out, targets)
+            scaler.scale(train_loss).backward()
+            # Update the params
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            out = model(images)
+            train_loss = cross_entropy(out, targets)
+            train_loss.backward()
+            optimizer.step()
+        # Update LR
+        scheduler.step()
 
         # Record
-        train_loss = train_loss.numpy()
-        if np.any(np.isnan(train_loss)):
+        if not torch.isfinite(train_loss):
             if batch_idx == 0:
                 raise ValueError("loss value is NaN or inf.")
             else:
                 break
-        loss_recorder.append(train_loss.mean())
+        loss_recorder.append(train_loss.item())
         # Stop after the number of iterations
         if batch_idx + 1 == num_it:
             break
 
     return lr_recorder[: len(loss_recorder)], loss_recorder
-
-
-@tf.function
-def apply_grads(optimizer, grads, model):
-    optimizer.apply_gradients(zip(grads, model.trainable_weights))
 
 
 def fit_one_epoch(model, train_loader, batch_transforms, optimizer, amp=False):
@@ -139,23 +152,27 @@ def fit_one_epoch(model, train_loader, batch_transforms, optimizer, amp=False):
     interval_progress = 5
     pbar = tqdm(train_loader, position=1)
     send_on_slack(str(pbar))
+    import tensorflow as tf
     for images, targets in pbar:
         images = batch_transforms(images)
 
+        images = tf.convert_to_tensor(images)
+        images = tf.transpose(images, (0, 3, 2, 1))
         with tf.GradientTape() as tape:
             out = model(images, training=True)
             train_loss = tf.nn.sparse_softmax_cross_entropy_with_logits(targets, out)
         grads = tape.gradient(train_loss, model.trainable_weights)
         if amp:
             grads = optimizer.get_unscaled_gradients(grads)
-        apply_grads(optimizer, grads, model)
+        optimizer.apply_gradients(zip(grads, model.trainable_weights))
 
         pbar.set_description(f"Training loss: {train_loss.numpy().mean():.6}")
         current_progress = pbar.n / pbar.total * 100
         if current_progress - last_progress > interval_progress:
             send_on_slack(str(pbar))
             last_progress = int(current_progress)
-    send_on_slack(f"Final training loss: {train_loss.numpy().mean():.6}")
+    send_on_slack(str(pbar))
+    #send_on_slack(f"Final training loss: {train_loss.item():.6}")
 
 
 def evaluate(model, val_loader, batch_transforms):
@@ -166,8 +183,11 @@ def evaluate(model, val_loader, batch_transforms):
     val_iter = iter(val_loader)
     pbar = tqdm(val_iter)
     send_on_slack(str(pbar))
+    import tensorflow as tf
     for images, targets in pbar:
         images = batch_transforms(images)
+        images = tf.convert_to_tensor(images)
+        images = tf.transpose(images, (0, 3, 2, 1))
         out = model(images, training=False)
         loss = tf.nn.sparse_softmax_cross_entropy_with_logits(targets, out)
         # Compute metric
@@ -187,13 +207,6 @@ def evaluate(model, val_loader, batch_transforms):
     return val_loss, acc
 
 
-def collate_fn(samples):
-    images, targets = zip(*samples)
-    images = tf.stack(images, axis=0)
-
-    return images, tf.convert_to_tensor(targets)
-
-
 def main(args):
     print(args)
     send_on_slack(f"Start training: {args}")
@@ -201,16 +214,18 @@ def main(args):
     if args.push_to_hub:
         login_to_hub()
 
+    if not isinstance(args.workers, int):
+        args.workers = min(16, mp.cpu_count())
+
+    torch.backends.cudnn.benchmark = True
+
     input_size = (512, 512) if args.type == "page" else (256, 256)
 
-    # AMP
-    if args.amp:
-        mixed_precision.set_global_policy("mixed_float16")
-
+    # Load val data generator
     st = time.time()
     val_set = OrientationDataset(
         img_folder=os.path.join(args.val_path, "images"),
-        img_transforms=T.Compose([
+        img_transforms=Compose([
             T.Resize(input_size, preserve_aspect_ratio=True, symmetric_pad=True),
         ]),
         sample_transforms=T.SampleCompose([
@@ -218,37 +233,46 @@ def main(args):
             T.Resize(input_size),
         ]),
     )
-
     val_loader = DataLoader(
         val_set,
         batch_size=args.batch_size,
-        shuffle=False,
         drop_last=False,
-        collate_fn=collate_fn,
+        num_workers=args.workers,
+        sampler=SequentialSampler(val_set),
+        pin_memory=torch.cuda.is_available(),
     )
-    print(
-        f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in {val_loader.num_batches} batches)"
-    )
+    print(f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in " f"{len(val_loader)} batches)")
     send_on_slack(
-        f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in {val_loader.num_batches} batches)"
+        f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in " f"{len(val_loader)} batches)"
     )
 
+    batch_transforms = Normalize(mean=(0.694, 0.695, 0.693), std=(0.299, 0.296, 0.301))
+
     # Load doctr model
-    model = classification.__dict__[args.arch](
-        pretrained=args.pretrained,
-        input_shape=(*(input_size), 3),
-        num_classes=len(CLASSES),
-        classes=CLASSES,
-        include_top=True,
-    )
+    import doctr.models.classification.mobilenet.tensorflow as classification_tf
+    model = classification_tf.__dict__[args.arch](pretrained=args.pretrained, num_classes=len(CLASSES), classes=CLASSES)
 
     # Resume weights
     if isinstance(args.resume, str):
-        model.load_weights(args.resume)
+        print(f"Resuming {args.resume}")
+        send_on_slack(f"Resuming {args.resume}")
+        checkpoint = torch.load(args.resume, map_location="cpu")
+        model.load_state_dict(checkpoint)
 
-    batch_transforms = T.Compose([
-        T.Normalize(mean=(0.694, 0.695, 0.693), std=(0.299, 0.296, 0.301)),
-    ])
+    # GPU
+    #if isinstance(args.device, int):
+    #    if not torch.cuda.is_available():
+    #        raise AssertionError("PyTorch cannot access your GPU. Please investigate!")
+    #    if args.device >= torch.cuda.device_count():
+    #        raise ValueError("Invalid device index")
+    ## Silent default switch to GPU if available
+    #elif torch.cuda.is_available():
+    #    args.device = 0
+    #else:
+    #    logging.warning("No accessible GPU, targe device set to CPU.")
+    #if torch.cuda.is_available():
+    #    torch.cuda.set_device(args.device)
+    #    model = model.cuda()
 
     if args.test_only:
         print("Running evaluation")
@@ -259,35 +283,34 @@ def main(args):
     st = time.time()
     train_set = OrientationDataset(
         img_folder=os.path.join(args.train_path, "images"),
-        img_transforms=T.Compose([
+        img_transforms=Compose([
             T.Resize(input_size, preserve_aspect_ratio=True, symmetric_pad=True),
             # Augmentations
             T.RandomApply(T.ColorInversion(), 0.1),
-            T.RandomApply(T.ToGray(3), 0.1),
-            T.RandomJpegQuality(60),
-            T.RandomSaturation(0.3),
-            T.RandomContrast(0.3),
-            T.RandomBrightness(0.3),
-            # Blur
-            T.RandomApply(T.GaussianBlur(kernel_shape=(3, 3), std=(0.1, 3)), 0.1),
+            T.RandomApply(T.GaussianNoise(mean=0.1, std=0.1), 0.1),
+            T.RandomApply(T.RandomShadow(), 0.2),
+            T.RandomApply(GaussianBlur(kernel_size=3), 0.1),
+            RandomPhotometricDistort(p=0.1),
+            RandomGrayscale(p=0.1),
+            RandomPerspective(distortion_scale=0.1, p=0.3),
         ]),
         sample_transforms=T.SampleCompose([
             lambda x, y: rnd_rotate(x, y),
             T.Resize(input_size),
         ]),
     )
+
     train_loader = DataLoader(
         train_set,
         batch_size=args.batch_size,
-        shuffle=True,
         drop_last=True,
-        collate_fn=collate_fn,
+        num_workers=args.workers,
+        sampler=RandomSampler(train_set),
+        pin_memory=torch.cuda.is_available(),
     )
-    print(
-        f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in {train_loader.num_batches} batches)"
-    )
+    print(f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in " f"{len(train_loader)} batches)")
     send_on_slack(
-        f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in {train_loader.num_batches} batches)"
+        f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in " f"{len(train_loader)} batches)"
     )
 
     if args.show_samples:
@@ -296,93 +319,95 @@ def main(args):
         return
 
     # Optimizer
-    scheduler = optimizers.schedules.ExponentialDecay(
+    #optimizer = torch.optim.Adam(
+    #    [p for p in model.parameters() if p.requires_grad],
+    #    args.lr,
+    #    betas=(0.95, 0.99),
+    #    eps=1e-6,
+    #    weight_decay=args.weight_decay,
+    #)
+    import tensorflow as tf
+    scheduler = tf.keras.optimizers.schedules.ExponentialDecay(
         args.lr,
         decay_steps=args.epochs * len(train_loader),
         decay_rate=1 / (1e3),  # final lr as a fraction of initial lr
         staircase=False,
         name="ExponentialDecay",
     )
-    optimizer = optimizers.Adam(
+    optimizer = tf.keras.optimizers.Adam(
         learning_rate=scheduler,
         beta_1=0.95,
         beta_2=0.99,
         epsilon=1e-6,
     )
-    if args.amp:
-        optimizer = mixed_precision.LossScaleOptimizer(optimizer)
 
     # LR Finder
     if args.find_lr:
         lrs, losses = record_lr(model, train_loader, batch_transforms, optimizer, amp=args.amp)
         plot_recorder(lrs, losses)
         return
+    ## Scheduler
+    #if args.sched == "cosine":
+    #    scheduler = CosineAnnealingLR(optimizer, args.epochs * len(train_loader), eta_min=args.lr / 25e4)
+    #elif args.sched == "onecycle":
+    #    scheduler = OneCycleLR(optimizer, args.lr, args.epochs * len(train_loader))
 
-    # Tensorboard to monitor training
+    # Training monitoring
     current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     exp_name = f"{args.arch}_{current_time}" if args.name is None else args.name
 
-    config = {
-        "learning_rate": args.lr,
-        "epochs": args.epochs,
-        "batch_size": args.batch_size,
-        "architecture": args.arch,
-        "input_size": input_size,
-        "optimizer": "adam",
-        "framework": "pytorch",
-        "classes": CLASSES,
-        "scheduler": args.sched,
-        "pretrained": args.pretrained,
-    }
-
     # W&B
     if args.wb:
-        import wandb
-
-        run = wandb.init(name=exp_name, project="orientation-classification", config=config)
-    # ClearML
-    if args.clearml:
-        from clearml import Task
-
-        task = Task.init(project_name="docTR/orientation-classification", task_name=exp_name, reuse_last_task_id=False)
-        task.upload_artifact("config", config)
+        run = wandb.init(
+            name=exp_name,
+            project="orientation-classification",
+            config={
+                "learning_rate": args.lr,
+                "epochs": args.epochs,
+                "weight_decay": args.weight_decay,
+                "batch_size": args.batch_size,
+                "architecture": args.arch,
+                "input_size": input_size,
+                "optimizer": "adam",
+                "framework": "pytorch",
+                "classes": CLASSES,
+                "scheduler": args.sched,
+                "pretrained": args.pretrained,
+            },
+        )
 
     # Create loss queue
     min_loss = np.inf
-
     # Training loop
     if args.early_stop:
         early_stopper = EarlyStopper(patience=args.early_stop_epochs, min_delta=args.early_stop_delta)
     for epoch in range(args.epochs):
-        fit_one_epoch(model, train_loader, batch_transforms, optimizer, args.amp)
+        fit_one_epoch(model, train_loader, batch_transforms, optimizer)
+        model.save_weights(f"./{exp_name}_{epoch}/weights")
 
-        # Validation loop at the end of each epoch
-        val_loss, acc = evaluate(model, val_loader, batch_transforms)
-        if val_loss < min_loss:
-            print(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
-            send_on_slack(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
-            model.save_weights(Path(args.output_dir) / f"{exp_name}.weights.h5")
-            min_loss = val_loss
-        print(f"Epoch {epoch + 1}/{args.epochs} - Validation loss: {val_loss:.6} (Acc: {acc:.2%})")
-        send_on_slack(f"Epoch {epoch + 1}/{args.epochs} - Validation loss: {val_loss:.6} (Acc: {acc:.2%})")
-        # W&B
-        if args.wb:
-            wandb.log({
-                "val_loss": val_loss,
-                "acc": acc,
-            })
-
-        # ClearML
-        if args.clearml:
-            from clearml import Logger
-
-            logger = Logger.current_logger()
-            logger.report_scalar(title="Validation Loss", series="val_loss", value=val_loss, iteration=epoch)
-            logger.report_scalar(title="Accuracy", series="acc", value=acc, iteration=epoch)
-        if args.early_stop and early_stopper.early_stop(val_loss):
-            print("Training halted early due to reaching patience limit.")
-            send_on_slack("Training halted early due to reaching patience limit.")
-            break
+        try:
+            # Validation loop at the end of each epoch
+            val_loss, acc = evaluate(model, val_loader, batch_transforms)
+            if val_loss < min_loss:
+                print(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
+                send_on_slack(f"Validation loss decreased {min_loss:.6} --> {val_loss:.6}: saving state...")
+                model.save_weights(f"./{exp_name}/weights")
+                min_loss = val_loss
+            print(f"Epoch {epoch + 1}/{args.epochs} - Validation loss: {val_loss:.6} (Acc: {acc:.2%})")
+            send_on_slack(f"Epoch {epoch + 1}/{args.epochs} - Validation loss: {val_loss:.6} (Acc: {acc:.2%})")
+        except Exception:
+            import traceback
+            traceback.print_exc()
+        ## W&B
+        #if args.wb:
+        #    wandb.log({
+        #        "val_loss": val_loss,
+        #        "acc": acc,
+        #    })
+        #if args.early_stop and early_stopper.early_stop(val_loss):
+        #    print("Training halted early due to reaching patience limit.")
+        #    send_on_slack("Training halted early due to reaching patience limit.")
+        #    break
     if args.wb:
         run.finish()
 
@@ -391,13 +416,9 @@ def main(args):
 
     if args.export_onnx:
         print("Exporting model to ONNX...")
-        if args.arch in ["vit_s", "vit_b"]:
-            # fixed batch size for vit
-            dummy_input = [tf.TensorSpec([1, *(input_size), 3], tf.float32, name="input")]
-        else:
-            # dynamic batch size
-            dummy_input = [tf.TensorSpec([None, *(input_size), 3], tf.float32, name="input")]
-        model_path, _ = export_model_to_onnx(model, exp_name, dummy_input)
+        dummy_batch = next(iter(val_loader))
+        dummy_input = dummy_batch[0].cuda() if torch.cuda.is_available() else dummy_batch[0]
+        model_path = export_model_to_onnx(model, exp_name, dummy_input)
         print(f"Exported model saved in {model_path}")
 
 
@@ -405,28 +426,27 @@ def parse_args():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="DocTR training script for orientation classification (TensorFlow)",
+        description="DocTR training script for orientation classification (PyTorch)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
+    parser.add_argument("train_path", type=str, help="path to training data folder")
+    parser.add_argument("val_path", type=str, help="path to validation data folder")
     parser.add_argument("arch", type=str, help="classification model to train")
-    parser.add_argument("--output_dir", type=str, default=".", help="path to save checkpoints and final model")
-    parser.add_argument("--type", type=str, required=True, choices=["page", "crop"], help="type of data to train on")
-    parser.add_argument("--train_path", type=str, help="path to training data folder")
-    parser.add_argument("--val_path", type=str, required=True, help="path to validation data folder")
+    parser.add_argument("type", type=str, choices=["page", "crop"], help="type of data to train on")
     parser.add_argument("--name", type=str, default=None, help="Name of your training experiment")
     parser.add_argument("--epochs", type=int, default=10, help="number of epochs to train the model on")
     parser.add_argument("-b", "--batch_size", type=int, default=2, help="batch size for training")
     parser.add_argument("--device", default=None, type=int, help="device")
     parser.add_argument("--lr", type=float, default=0.001, help="learning rate for the optimizer (Adam)")
     parser.add_argument("--wd", "--weight-decay", default=0, type=float, help="weight decay", dest="weight_decay")
+    parser.add_argument("-j", "--workers", type=int, default=None, help="number of workers used for dataloading")
     parser.add_argument("--resume", type=str, default=None, help="Path to your checkpoint")
     parser.add_argument("--test-only", dest="test_only", action="store_true", help="Run the validation loop")
     parser.add_argument(
         "--show-samples", dest="show_samples", action="store_true", help="Display unormalized training samples"
     )
     parser.add_argument("--wb", dest="wb", action="store_true", help="Log to Weights & Biases")
-    parser.add_argument("--clearml", dest="clearml", action="store_true", help="Log to ClearML")
     parser.add_argument("--push-to-hub", dest="push_to_hub", action="store_true", help="Push to Huggingface Hub")
     parser.add_argument(
         "--pretrained",

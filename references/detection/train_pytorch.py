@@ -496,6 +496,14 @@ def main(args):
             },
         )
 
+    # ClearML
+    if args.clearml:
+        from clearml import Task
+
+        task = Task.init(project_name="docTR/text-detection", task_name=exp_name, reuse_last_task_id=False)
+        task.upload_artifact("config", config)
+
+
     # Create loss queue
     min_loss = np.inf
     if args.early_stop:
@@ -547,6 +555,16 @@ def main(args):
                 "precision": precision,
                 "mean_iou": mean_iou,
             })
+
+        # ClearML
+        if args.clearml:
+            from clearml import Logger
+
+            logger = Logger.current_logger()
+            logger.report_scalar(title="Validation Loss", series="val_loss", value=val_loss, iteration=epoch)
+            logger.report_scalar(title="Precision Recall", series="recall", value=recall, iteration=epoch)
+            logger.report_scalar(title="Precision Recall", series="precision", value=precision, iteration=epoch)
+            logger.report_scalar(title="Mean IoU", series="mean_iou", value=mean_iou, iteration=epoch)
         if args.early_stop and early_stopper.early_stop(val_loss):
             print("Training halted early due to reaching patience limit.")
             break
@@ -589,6 +607,7 @@ def parse_args():
         "--show-samples", dest="show_samples", action="store_true", help="Display unormalized training samples"
     )
     parser.add_argument("--wb", dest="wb", action="store_true", help="Log to Weights & Biases")
+    parser.add_argument("--clearml", dest="clearml", action="store_true", help="Log to ClearML")
     parser.add_argument("--push-to-hub", dest="push_to_hub", action="store_true", help="Push to Huggingface Hub")
     parser.add_argument(
         "--pretrained",

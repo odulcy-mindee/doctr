@@ -470,6 +470,22 @@ def main(args):
     # Training monitoring
     current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     exp_name = f"{args.arch}_{current_time}" if args.name is None else args.name
+    config = {
+        "learning_rate": args.lr,
+        "epochs": args.epochs,
+        "weight_decay": args.weight_decay,
+        "batch_size": args.batch_size,
+        "architecture": args.arch,
+        "input_size": args.input_size,
+        "optimizer": args.optim,
+        "framework": "pytorch",
+        "scheduler": args.sched,
+        "train_hash": train_hash,
+        "val_hash": val_hash,
+        "pretrained": args.pretrained,
+        "rotation": args.rotation,
+        "amp": args.amp,
+    }
 
     # W&B
     if args.wb:
@@ -478,22 +494,7 @@ def main(args):
         run = wandb.init(
             name=exp_name,
             project="text-detection",
-            config={
-                "learning_rate": args.lr,
-                "epochs": args.epochs,
-                "weight_decay": args.weight_decay,
-                "batch_size": args.batch_size,
-                "architecture": args.arch,
-                "input_size": args.input_size,
-                "optimizer": args.optim,
-                "framework": "pytorch",
-                "scheduler": args.sched,
-                "train_hash": train_hash,
-                "val_hash": val_hash,
-                "pretrained": args.pretrained,
-                "rotation": args.rotation,
-                "amp": args.amp,
-            },
+            config=config,
         )
 
     # ClearML

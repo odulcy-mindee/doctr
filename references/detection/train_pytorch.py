@@ -25,19 +25,13 @@ if os.getenv("TQDM_SLACK_TOKEN") and os.getenv("TQDM_SLACK_CHANNEL"):
 else:
     from tqdm.auto import tqdm
 
+from slack_sdk import WebClient
+
 from doctr import transforms as T
 from doctr.datasets import DetectionDataset
 from doctr.models import detection, login_to_hub, push_to_hf_hub
 from doctr.utils.metrics import LocalizationConfusion
 from utils import EarlyStopper, plot_recorder, plot_samples
-
-SLACK_WEBHOOK_URL = None
-SLACK_WEBHOOK_PATH = Path(os.path.join(os.path.expanduser("~"), ".config", "doctr", "slack_webhook_url.txt"))
-if SLACK_WEBHOOK_PATH.exists():
-    with open(SLACK_WEBHOOK_PATH) as f:
-        SLACK_WEBHOOK_URL = f.read().strip()
-else:
-    print(f"{SLACK_WEBHOOK_PATH} does not exist, skip Slack integration configuration...")
 
 
 def send_on_slack(text: str):
@@ -46,16 +40,12 @@ def send_on_slack(text: str):
     Args:
         text (str): message to send on Slack
     """
-    if SLACK_WEBHOOK_URL:
-        try:
-            import requests
-
-            requests.post(
-                url=SLACK_WEBHOOK_URL,
-                json={"text": f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]: {text}"},
-            )
-        except Exception:
-            print("Impossible to send message on Slack, continue...")
+    if os.getenv("TQDM_SLACK_TOKEN") and os.getenv("TQDM_SLACK_CHANNEL"):
+        client = WebClient(token=os.getenv("TQDM_SLACK_TOKEN"))
+        client.chat_postMessage(
+            channel=os.getenv("TQDM_SLACK_CHANNEL"),
+            text=f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]: {text}",
+        )
 
 
 def record_lr(
@@ -135,10 +125,7 @@ def fit_one_epoch(model, train_loader, batch_transforms, optimizer, scheduler, a
 
     model.train()
     # Iterate over the batches of the dataset
-    last_progress = 0
-    interval_progress = 5
     pbar = tqdm(train_loader, position=1)
-    send_on_slack(str(pbar))
     for images, targets in pbar:
         if torch.cuda.is_available():
             images = images.cuda()
@@ -163,10 +150,6 @@ def fit_one_epoch(model, train_loader, batch_transforms, optimizer, scheduler, a
 
         scheduler.step()
         pbar.set_description(f"Training loss: {train_loss.item():.6}")
-        current_progress = pbar.n / pbar.total * 100
-        if current_progress - last_progress > interval_progress:
-            send_on_slack(str(pbar))
-            last_progress = int(current_progress)
     send_on_slack(f"Final training loss: {train_loss.item():.6}")
 
 
@@ -176,10 +159,7 @@ def evaluate(model, val_loader, batch_transforms, val_metric, amp=False):
     model.eval()
     # Reset val metric
     val_metric.reset()
-    last_progress = 0
-    interval_progress = 5
     pbar = tqdm(val_loader)
-    send_on_slack(str(pbar))
     # Validation loop
     val_loss, batch_cnt = 0, 0
     for images, targets in pbar:
@@ -200,10 +180,6 @@ def evaluate(model, val_loader, batch_transforms, val_metric, amp=False):
                     boxes_pred = np.concatenate((boxes_pred[:, :4].min(axis=1), boxes_pred[:, :4].max(axis=1)), axis=-1)
                 val_metric.update(gts=boxes_gt, preds=boxes_pred[:, :4])
 
-        current_progress = pbar.n / pbar.total * 100
-        if current_progress - last_progress > interval_progress:
-            send_on_slack(str(pbar))
-            last_progress = int(current_progress)
         val_loss += out["loss"].item()
         batch_cnt += 1
 

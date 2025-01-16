@@ -122,13 +122,15 @@ def apply_grads(optimizer, grads, model):
     optimizer.apply_gradients(zip(grads, model.trainable_weights))
 
 
-def fit_one_epoch(model, train_loader, batch_transforms, optimizer, amp=False):
+def fit_one_epoch(model, train_loader, batch_transforms, optimizer, amp=False, clearml_log=False):
     train_iter = iter(train_loader)
     # Iterate over the batches of the dataset
-    last_progress = 0
-    interval_progress = 5
+    if clearml_log:
+        from clearml import Logger
+
+        logger = Logger.current_logger()
+
     pbar = tqdm(train_iter, position=1)
-    send_on_slack(str(pbar))
     for images, targets in pbar:
         images = batch_transforms(images)
 
@@ -140,10 +142,12 @@ def fit_one_epoch(model, train_loader, batch_transforms, optimizer, amp=False):
         apply_grads(optimizer, grads, model)
 
         pbar.set_description(f"Training loss: {train_loss.numpy():.6}")
-        current_progress = pbar.n / pbar.total * 100
-        if current_progress - last_progress > interval_progress:
-            send_on_slack(str(pbar))
-            last_progress = int(current_progress)
+        if clearml_log:
+            global iteration
+            logger.report_scalar(
+                title="Training Loss", series="train_loss", value=train_loss.numpy(), iteration=iteration
+            )
+            iteration += 1
     send_on_slack(f"Final training loss: {train_loss.numpy():.6}")
 
 
@@ -404,6 +408,8 @@ def main(args):
 
         task = Task.init(project_name="docTR/text-detection", task_name=exp_name, reuse_last_task_id=False)
         task.upload_artifact("config", config)
+        global iteration
+        iteration = 0
 
     if args.freeze_backbone:
         for layer in model.feat_extractor.layers:
@@ -415,7 +421,7 @@ def main(args):
 
     # Training loop
     for epoch in range(args.epochs):
-        fit_one_epoch(model, train_loader, batch_transforms, optimizer, args.amp)
+        fit_one_epoch(model, train_loader, batch_transforms, optimizer, args.amp, args.clearml)
         # Validation loop at the end of each epoch
         val_loss, recall, precision, mean_iou = evaluate(model, val_loader, batch_transforms, val_metric)
         if val_loss < min_loss:
@@ -451,6 +457,7 @@ def main(args):
             logger.report_scalar(title="Precision Recall", series="recall", value=recall, iteration=epoch)
             logger.report_scalar(title="Precision Recall", series="precision", value=precision, iteration=epoch)
             logger.report_scalar(title="Mean IoU", series="mean_iou", value=mean_iou, iteration=epoch)
+
         if args.early_stop and early_stopper.early_stop(val_loss):
             print("Training halted early due to reaching patience limit.")
             break

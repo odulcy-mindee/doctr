@@ -119,11 +119,16 @@ def record_lr(
     return lr_recorder[: len(loss_recorder)], loss_recorder
 
 
-def fit_one_epoch(model, train_loader, batch_transforms, optimizer, scheduler, amp=False):
+def fit_one_epoch(model, train_loader, batch_transforms, optimizer, scheduler, amp=False, clearml_log=False):
     if amp:
         scaler = torch.cuda.amp.GradScaler()
 
     model.train()
+    if clearml_log:
+        from clearml import Logger
+
+        logger = Logger.current_logger()
+
     # Iterate over the batches of the dataset
     pbar = tqdm(train_loader, position=1)
     for images, targets in pbar:
@@ -150,6 +155,12 @@ def fit_one_epoch(model, train_loader, batch_transforms, optimizer, scheduler, a
 
         scheduler.step()
         pbar.set_description(f"Training loss: {train_loss.item():.6}")
+        if clearml_log:
+            global iteration
+            logger.report_scalar(
+                title="Training Loss", series="train_loss", value=train_loss.item(), iteration=iteration
+            )
+            iteration += 1
     send_on_slack(f"Final training loss: {train_loss.item():.6}")
 
 
@@ -503,7 +514,8 @@ def main(args):
 
         task = Task.init(project_name="docTR/text-detection", task_name=exp_name, reuse_last_task_id=False)
         task.upload_artifact("config", config)
-
+        global iteration
+        iteration = 0
 
     # Create loss queue
     min_loss = np.inf
@@ -512,7 +524,9 @@ def main(args):
 
     # Training loop
     for epoch in range(args.epochs):
-        fit_one_epoch(model, train_loader, batch_transforms, optimizer, scheduler, amp=args.amp)
+        fit_one_epoch(
+            model, train_loader, batch_transforms, optimizer, scheduler, amp=args.amp, clearml_log=args.clearml
+        )
         # Validation loop at the end of each epoch
         val_loss, recall, precision, mean_iou = evaluate(model, val_loader, batch_transforms, val_metric, amp=args.amp)
         funsd_recall, funsd_precision, funsd_mean_iou = 0.0, 0.0, 0.0
@@ -563,9 +577,10 @@ def main(args):
 
             logger = Logger.current_logger()
             logger.report_scalar(title="Validation Loss", series="val_loss", value=val_loss, iteration=epoch)
-            logger.report_scalar(title="Precision Recall", series="recall", value=recall, iteration=epoch)
-            logger.report_scalar(title="Precision Recall", series="precision", value=precision, iteration=epoch)
+            logger.report_scalar(title="Recall", series="recall", value=recall, iteration=epoch)
+            logger.report_scalar(title="Precision", series="precision", value=precision, iteration=epoch)
             logger.report_scalar(title="Mean IoU", series="mean_iou", value=mean_iou, iteration=epoch)
+
         if args.early_stop and early_stopper.early_stop(val_loss):
             print("Training halted early due to reaching patience limit.")
             break

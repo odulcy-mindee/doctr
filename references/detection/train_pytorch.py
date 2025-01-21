@@ -484,7 +484,7 @@ def main(args):
     elif args.sched == "onecycle":
         scheduler = OneCycleLR(optimizer, args.lr, total_steps)
     elif args.sched == "poly":
-        scheduler = PolynomialLR(optimizer, total_steps)
+        scheduler = PolynomialLR(optimizer, total_steps, power=0.5)
 
     # Training monitoring
     current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")

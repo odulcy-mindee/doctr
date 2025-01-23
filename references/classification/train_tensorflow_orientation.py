@@ -38,33 +38,6 @@ from doctr.models.utils import export_model_to_onnx
 from doctr.transforms.functional import rotated_img_tensor
 from utils import EarlyStopper, plot_recorder, plot_samples
 
-SLACK_WEBHOOK_URL = None
-SLACK_WEBHOOK_PATH = Path(os.path.join(os.path.expanduser("~"), ".config", "doctr", "slack_webhook_url.txt"))
-if SLACK_WEBHOOK_PATH.exists():
-    with open(SLACK_WEBHOOK_PATH) as f:
-        SLACK_WEBHOOK_URL = f.read().strip()
-else:
-    print(f"{SLACK_WEBHOOK_PATH} does not exist, skip Slack integration configuration...")
-
-
-def send_on_slack(text: str):
-    """Send a message on Slack.
-
-    Args:
-        text (str): message to send on Slack
-    """
-    if SLACK_WEBHOOK_URL:
-        try:
-            import requests
-
-            requests.post(
-                url=SLACK_WEBHOOK_URL,
-                json={"text": f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]: {text}"},
-            )
-        except Exception:
-            print("Impossible to send message on Slack, continue...")
-
-
 CLASSES = [0, -90, 180, 90]
 
 
@@ -168,8 +141,6 @@ def fit_one_epoch(model, train_loader, batch_transforms, optimizer, amp=False, l
 
 def evaluate(model, val_loader, batch_transforms, log=None):
     # Validation loop
-    last_progress = 0
-    interval_progress = 5
     val_loss, correct, samples, batch_cnt = 0.0, 0.0, 0.0, 0.0
     val_iter = iter(val_loader)
     pbar = tqdm(val_iter, dynamic_ncols=True)
@@ -186,11 +157,6 @@ def evaluate(model, val_loader, batch_transforms, log=None):
         val_loss += loss.numpy().mean()
         batch_cnt += 1
         samples += images.shape[0]
-
-        current_progress = pbar.n / pbar.total * 100
-        if current_progress - last_progress > interval_progress:
-            send_on_slack(str(pbar))
-            last_progress = int(current_progress)
 
     val_loss /= batch_cnt
     acc = correct / samples
@@ -237,9 +203,6 @@ def main(args):
         collate_fn=collate_fn,
     )
     pbar.write(
-        f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in {val_loader.num_batches} batches)"
-    )
-    send_on_slack(
         f"Validation set loaded in {time.time() - st:.4}s ({len(val_set)} samples in {val_loader.num_batches} batches)"
     )
 
@@ -294,9 +257,6 @@ def main(args):
         collate_fn=collate_fn,
     )
     pbar.write(
-        f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in {train_loader.num_batches} batches)"
-    )
-    send_on_slack(
         f"Train set loaded in {time.time() - st:.4}s ({len(train_set)} samples in {train_loader.num_batches} batches)"
     )
 

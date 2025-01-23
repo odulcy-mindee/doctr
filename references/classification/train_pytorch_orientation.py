@@ -38,33 +38,6 @@ from doctr.models import classification, login_to_hub, push_to_hf_hub
 from doctr.models.utils import export_model_to_onnx
 from utils import EarlyStopper, plot_recorder, plot_samples
 
-SLACK_WEBHOOK_URL = None
-SLACK_WEBHOOK_PATH = Path(os.path.join(os.path.expanduser("~"), ".config", "doctr", "slack_webhook_url.txt"))
-if SLACK_WEBHOOK_PATH.exists():
-    with open(SLACK_WEBHOOK_PATH) as f:
-        SLACK_WEBHOOK_URL = f.read().strip()
-else:
-    print(f"{SLACK_WEBHOOK_PATH} does not exist, skip Slack integration configuration...")
-
-
-def send_on_slack(text: str):
-    """Send a message on Slack.
-
-    Args:
-        text (str): message to send on Slack
-    """
-    if SLACK_WEBHOOK_URL:
-        try:
-            import requests
-
-            requests.post(
-                url=SLACK_WEBHOOK_URL,
-                json={"text": f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]: {text}"},
-            )
-        except Exception:
-            print("Impossible to send message on Slack, continue...")
-
-
 CLASSES = [0, -90, 180, 90]
 
 
@@ -195,10 +168,6 @@ def fit_one_epoch(model, train_loader, batch_transforms, optimizer, scheduler, a
 def evaluate(model, val_loader, batch_transforms, amp=False, log=None):
     # Model in eval mode
     model.eval()
-    last_progress = 0
-    interval_progress = 5
-    pbar = tqdm(val_loader)
-    send_on_slack(str(pbar))
     # Validation loop
     val_loss, correct, samples, batch_cnt = 0.0, 0.0, 0.0, 0.0
     pbar = tqdm(val_loader, dynamic_ncols=True)
@@ -225,11 +194,6 @@ def evaluate(model, val_loader, batch_transforms, amp=False, log=None):
         val_loss += loss.item()
         batch_cnt += 1
         samples += images.shape[0]
-
-        current_progress = pbar.n / pbar.total * 100
-        if current_progress - last_progress > interval_progress:
-            send_on_slack(str(pbar))
-            last_progress = int(current_progress)
 
     val_loss /= batch_cnt
     acc = correct / samples

@@ -4,7 +4,6 @@
 # See LICENSE or go to <https://opensource.org/licenses/Apache-2.0> for full license details.
 
 import os
-from pathlib import Path
 
 os.environ["USE_TORCH"] = "1"
 
@@ -13,6 +12,7 @@ import hashlib
 import logging
 import multiprocessing as mp
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -25,27 +25,11 @@ if os.getenv("TQDM_SLACK_TOKEN") and os.getenv("TQDM_SLACK_CHANNEL"):
 else:
     from tqdm.auto import tqdm
 
-from slack_sdk import WebClient
-
 from doctr import transforms as T
 from doctr.datasets import DetectionDataset
 from doctr.models import detection, login_to_hub, push_to_hf_hub
 from doctr.utils.metrics import LocalizationConfusion
 from utils import EarlyStopper, plot_recorder, plot_samples
-
-
-def send_on_slack(text: str):
-    """Send a message on Slack.
-
-    Args:
-        text (str): message to send on Slack
-    """
-    if os.getenv("TQDM_SLACK_TOKEN") and os.getenv("TQDM_SLACK_CHANNEL"):
-        client = WebClient(token=os.getenv("TQDM_SLACK_TOKEN"))
-        client.chat_postMessage(
-            channel=os.getenv("TQDM_SLACK_CHANNEL"),
-            text=f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]: {text}",
-        )
 
 
 def record_lr(
@@ -163,7 +147,6 @@ def evaluate(model, val_loader, batch_transforms, val_metric, amp=False, log=Non
     model.eval()
     # Reset val metric
     val_metric.reset()
-    pbar = tqdm(val_loader)
     # Validation loop
     val_loss, batch_cnt = 0, 0
     pbar = tqdm(val_loader, dynamic_ncols=True)

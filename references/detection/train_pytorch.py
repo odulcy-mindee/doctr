@@ -185,7 +185,7 @@ def evaluate(model, val_loader, batch_transforms, val_metric, amp=False, log=Non
 
 
 def main(args):
-    pbar = tqdm(disable=True)
+    pbar = tqdm(disable=False)
     pbar.write(str(args))
 
     if args.push_to_hub:

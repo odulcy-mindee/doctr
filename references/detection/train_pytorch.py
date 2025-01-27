@@ -185,7 +185,10 @@ def evaluate(model, val_loader, batch_transforms, val_metric, amp=False, log=Non
 
 
 def main(args):
-    pbar = tqdm(disable=True)
+    pbar = tqdm(disable=False)
+    # Monkey patch tqdm write method to send messages directly to Slack
+    if os.getenv("TQDM_SLACK_TOKEN") and os.getenv("TQDM_SLACK_CHANNEL"):
+        pbar.write = lambda msg: pbar.sio.client.chat_postMessage(channel=os.getenv("TQDM_SLACK_CHANNEL"), text=msg)
     pbar.write(str(args))
 
     if args.push_to_hub:
@@ -233,6 +236,72 @@ def main(args):
 
     batch_transforms = Normalize(mean=(0.798, 0.785, 0.772), std=(0.264, 0.2749, 0.287))
 
+    # funsd_ds = DetectionDataset(
+    #    img_folder=os.path.join(args.funsd_path, "images"),
+    #    label_path=os.path.join(args.funsd_path, "labels.json"),
+    #    sample_transforms=T.SampleCompose(
+    #        (
+    #            [T.Resize((args.input_size, args.input_size), preserve_aspect_ratio=True, symmetric_pad=True)]
+    #            if not args.rotation or args.eval_straight
+    #            else []
+    #        )
+    #        + (
+    #            [
+    #                T.Resize(args.input_size, preserve_aspect_ratio=True),  # This does not pad
+    #                T.RandomApply(T.RandomRotate(90, expand=True), 0.5),
+    #                T.Resize((args.input_size, args.input_size), preserve_aspect_ratio=True, symmetric_pad=True),
+    #            ]
+    #            if args.rotation and not args.eval_straight
+    #            else []
+    #        )
+    #    ),
+    #    use_polygons=args.rotation and not args.eval_straight,
+    # )
+
+    # funsd_test_loader = DataLoader(
+    #    funsd_ds,
+    #    batch_size=args.batch_size,
+    #    drop_last=False,
+    #    num_workers=args.workers,
+    #    sampler=SequentialSampler(funsd_ds),
+    #    pin_memory=torch.cuda.is_available(),
+    #    collate_fn=funsd_ds.collate_fn,
+    # )
+    # print(f"FUNSD Test set loaded in {time.time() - st:.4}s ({len(funsd_ds)} samples in " f"{len(funsd_test_loader)} batches)")
+
+    # cord_ds = DetectionDataset(
+    #    img_folder=os.path.join(args.cord_path, "images"),
+    #    label_path=os.path.join(args.cord_path, "labels.json"),
+    #    sample_transforms=T.SampleCompose(
+    #        (
+    #            [T.Resize((args.input_size, args.input_size), preserve_aspect_ratio=True, symmetric_pad=True)]
+    #            if not args.rotation or args.eval_straight
+    #            else []
+    #        )
+    #        + (
+    #            [
+    #                T.Resize(args.input_size, preserve_aspect_ratio=True),  # This does not pad
+    #                T.RandomApply(T.RandomRotate(90, expand=True), 0.5),
+    #                T.Resize((args.input_size, args.input_size), preserve_aspect_ratio=True, symmetric_pad=True),
+    #            ]
+    #            if args.rotation and not args.eval_straight
+    #            else []
+    #        )
+    #    ),
+    #    use_polygons=args.rotation and not args.eval_straight,
+    # )
+
+    # cord_test_loader = DataLoader(
+    #    cord_ds,
+    #    batch_size=args.batch_size,
+    #    drop_last=False,
+    #    num_workers=args.workers,
+    #    sampler=SequentialSampler(cord_ds),
+    #    pin_memory=torch.cuda.is_available(),
+    #    collate_fn=cord_ds.collate_fn,
+    # )
+    # print(f"CORD Test set loaded in {time.time() - st:.4}s ({len(cord_ds)} samples in " f"{len(funsd_test_loader)} batches)")
+
     # Load doctr model
     model = detection.__dict__[args.arch](
         pretrained=args.pretrained,
@@ -262,6 +331,16 @@ def main(args):
         model = model.cuda()
 
     # Metrics
+    # funsd_val_metric = LocalizationConfusion(
+    #    use_polygons=args.rotation and not args.eval_straight,
+    #    mask_shape=(args.input_size, args.input_size),
+    #    use_broadcasting=True if system_available_memory > 62 else False,
+    # )
+    # cord_val_metric = LocalizationConfusion(
+    #    use_polygons=args.rotation and not args.eval_straight,
+    #    mask_shape=(args.input_size, args.input_size),
+    #    use_broadcasting=True if system_available_memory > 62 else False,
+    # )
     val_metric = LocalizationConfusion(use_polygons=args.rotation and not args.eval_straight)
 
     if args.test_only:

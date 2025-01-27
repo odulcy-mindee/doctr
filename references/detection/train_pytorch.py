@@ -116,17 +116,22 @@ def fit_one_epoch(model, train_loader, batch_transforms, optimizer, scheduler, a
             images = images.cuda()
         images = batch_transforms(images)
 
+        optimizer.zero_grad()
         if amp:
             with torch.cuda.amp.autocast():
-                train_loss = model(images, targets)["loss"] / grad_accumulation_steps
+                train_loss = model(images, targets)["loss"]
             scaler.scale(train_loss).backward()
             # Gradient clipping
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5)
+            # Update the params
+            scaler.step(optimizer)
+            scaler.update()
         else:
-            train_loss = model(images, targets)["loss"] / grad_accumulation_steps
+            train_loss = model(images, targets)["loss"]
             train_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5)
+            optimizer.step()
 
         scheduler.step()
         last_lr = scheduler.get_last_lr()[0]
@@ -444,16 +449,12 @@ def main(args):
         return
 
     # Scheduler
-    # Effective steps per epoch (due to grad accumulation)
-    grad_steps = args.grad_accumulation
-    effective_steps_per_epoch = len(train_loader) // grad_steps
-    total_steps = args.epochs * effective_steps_per_epoch
     if args.sched == "cosine":
-        scheduler = CosineAnnealingLR(optimizer, total_steps, eta_min=args.lr / 25e4)
+        scheduler = CosineAnnealingLR(optimizer, args.epochs * len(train_loader), eta_min=args.lr / 25e4)
     elif args.sched == "onecycle":
-        scheduler = OneCycleLR(optimizer, args.lr, total_steps)
+        scheduler = OneCycleLR(optimizer, args.lr, args.epochs * len(train_loader))
     elif args.sched == "poly":
-        scheduler = PolynomialLR(optimizer, total_steps, power=0.5)
+        scheduler = PolynomialLR(optimizer, args.epochs * len(train_loader))
 
     # Training monitoring
     current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -608,7 +609,6 @@ def parse_args():
     parser.add_argument("--name", type=str, default=None, help="Name of your training experiment")
     parser.add_argument("--epochs", type=int, default=10, help="number of epochs to train the model on")
     parser.add_argument("-b", "--batch_size", type=int, default=2, help="batch size for training")
-    parser.add_argument("--grad_accumulation", type=int, default=1, help="gradient accumulation steps")
     parser.add_argument("--device", default=None, type=int, help="device")
     parser.add_argument(
         "--save-interval-epoch", dest="save_interval_epoch", action="store_true", help="Save model every epoch"

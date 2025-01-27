@@ -186,6 +186,9 @@ def evaluate(model, val_loader, batch_transforms, val_metric, amp=False, log=Non
 
 def main(args):
     pbar = tqdm(disable=False)
+    # Monkey patch tqdm write method to send messages directly to Slack
+    if os.getenv("TQDM_SLACK_TOKEN") and os.getenv("TQDM_SLACK_CHANNEL"):
+        pbar.write = lambda msg: pbar.sio.client.chat_postMessage(channel=os.getenv("TQDM_SLACK_CHANNEL"), text=msg)
     pbar.write(str(args))
 
     if args.push_to_hub:
